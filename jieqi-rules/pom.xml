@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>cn.jieqi</groupId>
+    <artifactId>jieqi-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+  <artifactId>jieqi-rules</artifactId>
+  <name>jieqi :: rules</name>
+  <description>纯规则引擎（设计文档 §5.1/§5.2）：无网络、无线程、无随机 —— 抽池随机在 jieqi-server 的 HiddenPool</description>
+  <dependencies>
+    <dependency>
+      <groupId>cn.jieqi</groupId>
+      <artifactId>jieqi-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+    </dependency>
+  </dependencies>
+</project>
