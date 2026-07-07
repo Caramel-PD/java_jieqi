@@ -17,6 +17,7 @@
     <module>jieqi-common</module>
     <module>jieqi-rules</module>
     <module>jieqi-ai</module>
+    <module>jieqi-server</module>
   </modules>
 
   <properties>
