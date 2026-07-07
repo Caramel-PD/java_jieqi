@@ -1,24 +1,20 @@
 package jieqi.server;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
 
-/**
- * Minimal B-01 WebSocket entry point: start the server and answer ping/pong.
- */
 public final class ServerMain {
     static final int DEFAULT_PORT = 8887;
 
     private ServerMain() {}
 
-    public static void main(String[] args) throws InterruptedException {
-        int port = parsePort(args);
-        PingPongServer server = new PingPongServer(port);
+    public static void main(String[] args) throws Exception {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv();
+        config.port = parsePort(args, config.port);
+        JieqiWebSocketServer server = new JieqiWebSocketServer(config);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -29,13 +25,17 @@ public final class ServerMain {
         }, "jieqi-server-shutdown"));
 
         server.start();
-        System.out.println("Jieqi server listening on port " + port);
+        System.out.println("Jieqi server listening on port " + config.port);
         Thread.currentThread().join();
     }
 
     static int parsePort(String[] args) {
+        return parsePort(args, DEFAULT_PORT);
+    }
+
+    static int parsePort(String[] args, int defaultPort) {
         if (args == null || args.length == 0 || args[0] == null || args[0].isBlank()) {
-            return DEFAULT_PORT;
+            return defaultPort;
         }
         try {
             int port = Integer.parseInt(args[0].trim());
@@ -43,50 +43,33 @@ public final class ServerMain {
                 throw new IllegalArgumentException("port out of range: " + args[0]);
             }
             return port;
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("invalid port: " + args[0], e);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("invalid port: " + args[0], ex);
         }
     }
 
-    static String handleTextMessage(String message) {
-        try {
-            JsonObject json = JsonParser.parseString(message).getAsJsonObject();
-            String type = json.has("messageType") ? json.get("messageType").getAsString() : "";
-            if ("ping".equalsIgnoreCase(type) && json.has("timestamp")) {
-                return Messages.pong(json.get("timestamp").getAsLong());
-            }
-            return unsupportedMessage();
-        } catch (Exception e) {
-            return unsupportedMessage();
-        }
-    }
+    static final class JieqiWebSocketServer extends WebSocketServer {
+        private final ProtocolServer protocol;
 
-    private static String unsupportedMessage() {
-        JsonObject error = new JsonObject();
-        error.addProperty("messageType", "error");
-        error.addProperty("message", "unsupported message");
-        return error.toString();
-    }
-
-    static final class PingPongServer extends WebSocketServer {
-        PingPongServer(int port) {
-            super(new InetSocketAddress(port));
+        JieqiWebSocketServer(Core.ServerConfig config) {
+            super(new InetSocketAddress(config.port));
+            this.protocol = new ProtocolServer(config);
         }
 
         @Override
         public void onOpen(WebSocket conn, ClientHandshake handshake) {
-            System.out.println("client connected: " + remote(conn));
+            protocol.onConnected(new WebSocketChannel(conn));
         }
 
         @Override
         public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-            System.out.println("client closed: " + remote(conn) + ", code=" + code + ", reason=" + reason);
+            protocol.onClosed(new WebSocketChannel(conn));
+            System.out.println("websocket closed: code=" + code + ", reason=" + reason + ", remote=" + remote);
         }
 
         @Override
         public void onMessage(WebSocket conn, String message) {
-            System.out.println("message from " + remote(conn) + ": " + message);
-            conn.send(handleTextMessage(message));
+            protocol.onMessage(new WebSocketChannel(conn), message);
         }
 
         @Override
@@ -99,12 +82,33 @@ public final class ServerMain {
         public void onStart() {
             System.out.println("websocket server started: " + getAddress());
         }
+    }
 
-        private static String remote(WebSocket conn) {
-            if (conn == null || conn.getRemoteSocketAddress() == null) {
-                return "<unknown>";
-            }
-            return conn.getRemoteSocketAddress().toString();
+    private record WebSocketChannel(WebSocket conn) implements Core.ClientChannel {
+        @Override
+        public void send(String json) {
+            conn.send(json);
         }
+
+        @Override
+        public void closeConnection() {
+            conn.close();
+        }
+
+        @Override
+        public boolean isOpen() {
+            return conn.isOpen();
+        }
+
+        @Override
+        public String remote() {
+            return ServerMain.remote(conn);
+        }
+    }
+
+    private static String remote(WebSocket conn) {
+        return conn == null || conn.getRemoteSocketAddress() == null
+                ? "<unknown>"
+                : conn.getRemoteSocketAddress().toString();
     }
 }
