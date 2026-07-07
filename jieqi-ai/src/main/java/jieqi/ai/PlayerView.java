@@ -1,8 +1,12 @@
 package jieqi.ai;
 
 import jieqi.common.Color;
+import jieqi.common.Coord;
+import jieqi.common.Move;
 import jieqi.rules.BoardSnapshot;
+import jieqi.rules.RuleEngine;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -30,7 +34,11 @@ public final class PlayerView {
         return sideToMove;
     }
 
-    BoardSnapshot informationBoard() {
-        return informationBoard;
+    public List<Move> legalMoves() {
+        return RuleEngine.generateLegalMoves(informationBoard, sideToMove);
+    }
+
+    public boolean isOccupied(Coord coord) {
+        return !informationBoard.cellAt(Objects.requireNonNull(coord, "coord")).isEmpty();
     }
 }

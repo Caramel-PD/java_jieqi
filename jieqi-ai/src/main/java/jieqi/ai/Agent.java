@@ -14,5 +14,5 @@ public interface Agent {
      *
      * @return a legal move, or {@link Optional#empty()} when no legal move exists
      */
-    Optional<Move> selectMove(PlayerView view);
+    Optional<Move> selectMove(PlayerView view, TimeBudget budget);
 }

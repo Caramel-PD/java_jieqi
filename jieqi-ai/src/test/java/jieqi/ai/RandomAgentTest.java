@@ -19,7 +19,7 @@ class RandomAgentTest {
         PlayerView view = PlayerView.of(initial.board(), initial.sideToMove());
         Agent agent = new RandomAgent(20260707L);
 
-        Optional<Move> selected = agent.selectMove(view);
+        Optional<Move> selected = agent.selectMove(view, TimeBudget.ofMillis(1000));
 
         assertTrue(selected.isPresent(), "initial board should have legal moves");
         Move move = selected.orElseThrow();
@@ -34,6 +34,6 @@ class RandomAgentTest {
         BoardSnapshot emptyBoard = BoardSnapshot.of(new jieqi.rules.CellState[10][9]);
         PlayerView view = PlayerView.of(emptyBoard, Color.RED);
 
-        assertTrue(agent.selectMove(view).isEmpty());
+        assertTrue(agent.selectMove(view, TimeBudget.ofMillis(1000)).isEmpty());
     }
 }

@@ -1,7 +1,6 @@
 package jieqi.ai;
 
 import jieqi.common.Move;
-import jieqi.rules.RuleEngine;
 
 import java.util.List;
 import java.util.Objects;
@@ -28,10 +27,11 @@ public final class RandomAgent implements Agent {
     }
 
     @Override
-    public Optional<Move> selectMove(PlayerView view) {
+    public Optional<Move> selectMove(PlayerView view, TimeBudget budget) {
         Objects.requireNonNull(view, "view");
+        Objects.requireNonNull(budget, "budget");
 
-        List<Move> legalMoves = RuleEngine.generateLegalMoves(view.informationBoard(), view.sideToMove());
+        List<Move> legalMoves = view.legalMoves();
         if (legalMoves.isEmpty()) {
             return Optional.empty();
         }
