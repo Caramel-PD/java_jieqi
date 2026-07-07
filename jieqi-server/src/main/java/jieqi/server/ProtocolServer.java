@@ -3,13 +3,19 @@ package jieqi.server;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import jieqi.common.Color;
+import jieqi.common.Coord;
 import jieqi.common.Json;
+import jieqi.common.PieceType;
+import jieqi.rules.Legality;
+import jieqi.rules.RuleEngine;
 
+import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -21,6 +27,8 @@ final class ProtocolServer {
     static final int ERROR_BAD_JSON = 4001;
     static final int ERROR_AUTH = 1001;
     static final int ERROR_DUPLICATE_LOGIN = 1002;
+    static final int ERROR_ILLEGAL_MOVE = 2001;
+    static final int ERROR_WRONG_TURN = 2002;
 
     private final Core.ServerConfig config;
     private final Core.AccountStore accounts;
@@ -93,6 +101,7 @@ final class ProtocolServer {
                 case "startmatch" -> handleStartMatch(session);
                 case "requestfirsthand" -> handleRequestFirstHand(session, json);
                 case "ready" -> handleReady(session);
+                case "move" -> handleMove(session, json);
                 case "ping" -> handlePing(session, json);
                 case "resign" -> handleResign(session);
                 default -> System.out.println("ignore unknown messageType: " + type);
@@ -154,7 +163,8 @@ final class ProtocolServer {
                 System.out.println("player waiting for match: " + session.userId);
                 return;
             }
-            GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session);
+            GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
+                    config.initialBoardMode);
             opponent.room = room;
             session.room = room;
             opponent.state = Core.SessionState.IN_ROOM;
@@ -199,6 +209,16 @@ final class ProtocolServer {
         session.send(Messages.pong(timestamp.getAsLong()));
     }
 
+    private void handleMove(Core.Session session, JsonObject json) {
+        MoveMessage move = parseMove(json);
+        if (session.room instanceof GameRoom room) {
+            room.move(session, move);
+        } else {
+            session.send(Messages.moveResult(false, move.from, move.to, move.clientFlip, null, null));
+            session.send(Messages.error(ERROR_ILLEGAL_MOVE, "not in game"));
+        }
+    }
+
     private void handleResign(Core.Session session) {
         if (session.room instanceof GameRoom room) {
             room.resign(session);
@@ -215,24 +235,75 @@ final class ProtocolServer {
         return false;
     }
 
+    private static MoveMessage parseMove(JsonObject json) {
+        String fromX = requiredString(json, "fromX");
+        int fromY = requiredInt(json, "fromY");
+        String toX = requiredString(json, "toX");
+        int toY = requiredInt(json, "toY");
+        boolean isFlip = requiredBool(json, "isFlip");
+        return new MoveMessage(coord(fromX, fromY), coord(toX, toY), isFlip);
+    }
+
+    private static Coord coord(String x, int y) {
+        if (x == null || x.length() != 1) {
+            throw new IllegalArgumentException("bad coordinate file");
+        }
+        return new Coord(Character.toLowerCase(x.charAt(0)) - 'a', y);
+    }
+
+    private static String requiredString(JsonObject json, String key) {
+        JsonElement element = Json.get(json, key);
+        if (element == null || !element.isJsonPrimitive()) {
+            throw new IllegalArgumentException("missing " + key);
+        }
+        return element.getAsString();
+    }
+
+    private static int requiredInt(JsonObject json, String key) {
+        JsonElement element = Json.get(json, key);
+        if (element == null || !element.isJsonPrimitive()) {
+            throw new IllegalArgumentException("missing " + key);
+        }
+        return element.getAsInt();
+    }
+
+    private static boolean requiredBool(JsonObject json, String key) {
+        JsonElement element = Json.get(json, key);
+        if (element == null || !element.isJsonPrimitive()) {
+            throw new IllegalArgumentException("missing " + key);
+        }
+        return element.getAsBoolean();
+    }
+
+    private record MoveMessage(Coord from, Coord to, boolean clientFlip) {}
+
     private static final class GameRoom {
         final String id;
         final Core.Session red;
         final Core.Session black;
+        final String initialBoardMode;
+        final Core.ServerBoard board = new Core.ServerBoard();
+        final Random rng = new SecureRandom();
         private boolean redReady;
         private boolean blackReady;
         private Boolean redWannaFirst;
         private Boolean blackWannaFirst;
+        private Color turn = Color.RED;
+        private boolean started;
         private boolean finished;
 
-        GameRoom(String id, Core.Session red, Core.Session black) {
+        GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode) {
             this.id = id;
             this.red = red;
             this.black = black;
+            this.initialBoardMode = initialBoardMode;
         }
 
         synchronized void ready(Core.Session session) {
             if (finished) {
+                return;
+            }
+            if (started) {
                 return;
             }
             if (session == red) {
@@ -244,6 +315,7 @@ final class ProtocolServer {
             }
             if (redReady && blackReady) {
                 System.out.println("both players ready in " + id);
+                start();
             }
         }
 
@@ -257,6 +329,40 @@ final class ProtocolServer {
                 blackWannaFirst = wannaFirst;
             }
             System.out.println("first hand request in " + id + ": " + session.userId + "=" + wannaFirst);
+        }
+
+        synchronized void move(Core.Session session, MoveMessage move) {
+            if (finished) {
+                return;
+            }
+            if (!started) {
+                rejectMove(session, move, ERROR_ILLEGAL_MOVE, "game not started");
+                return;
+            }
+            Color mover = colorOf(session);
+            if (mover == null || mover != turn) {
+                rejectMove(session, move, ERROR_WRONG_TURN, "not your turn");
+                return;
+            }
+            Legality legality = RuleEngine.validate(board.snapshot(), mover, move.from, move.to);
+            if (!legality.legal()) {
+                rejectMove(session, move, ERROR_ILLEGAL_MOVE, "illegal move");
+                return;
+            }
+
+            Core.ApplyResult result = board.apply(mover, move.from, move.to, rng);
+            String moverCapture = capturedPieceFor(result, true);
+            String opponentCapture = capturedPieceFor(result, false);
+            session.send(Messages.moveResult(true, move.from, move.to, result.isFlip(),
+                    result.flipType(), moverCapture));
+            opponentOf(session).send(Messages.moveResult(true, move.from, move.to, result.isFlip(),
+                    result.flipType(), opponentCapture));
+            if (result.kingCaptured()) {
+                broadcast(Messages.gameOver(mover.json(), "checkmate", session.userId));
+                finished = true;
+                return;
+            }
+            turn = turn.opposite();
         }
 
         synchronized void resign(Core.Session session) {
@@ -283,6 +389,41 @@ final class ProtocolServer {
 
         private Core.Session opponentOf(Core.Session session) {
             return session == red ? black : red;
+        }
+
+        private void start() {
+            started = true;
+            turn = Color.RED;
+            red.send(Messages.gameStart(red.userId, black.userId, Color.RED,
+                    board.snapshot(), initialBoardMode));
+            black.send(Messages.gameStart(red.userId, black.userId, Color.BLACK,
+                    board.snapshot(), initialBoardMode));
+        }
+
+        private void rejectMove(Core.Session session, MoveMessage move, int code, String message) {
+            session.send(Messages.moveResult(false, move.from, move.to, move.clientFlip, null, null));
+            session.send(Messages.error(code, message));
+        }
+
+        private Color colorOf(Core.Session session) {
+            if (session == red) {
+                return Color.RED;
+            }
+            if (session == black) {
+                return Color.BLACK;
+            }
+            return null;
+        }
+
+        private static String capturedPieceFor(Core.ApplyResult result, boolean forMover) {
+            PieceType captured = result.capturedType();
+            if (captured == null) {
+                return null;
+            }
+            if (result.capturedWasHidden() && !forMover) {
+                return "NULL";
+            }
+            return captured.json();
         }
 
         private void broadcast(String json) {
