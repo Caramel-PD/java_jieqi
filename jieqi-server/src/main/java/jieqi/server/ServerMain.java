@@ -15,16 +15,22 @@ public final class ServerMain {
         Core.ServerConfig config = Core.ServerConfig.fromEnv();
         config.port = parsePort(args, config.port);
         JieqiWebSocketServer server = new JieqiWebSocketServer(config);
-        server.start();
+
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 server.stop(1_000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        }));
+        }, "jieqi-server-shutdown"));
+
+        server.start();
         System.out.println("Jieqi server listening on port " + config.port);
         Thread.currentThread().join();
+    }
+
+    static int parsePort(String[] args) {
+        return parsePort(args, DEFAULT_PORT);
     }
 
     static int parsePort(String[] args, int defaultPort) {
@@ -32,9 +38,9 @@ public final class ServerMain {
             return defaultPort;
         }
         try {
-            int port = Integer.parseInt(args[0]);
+            int port = Integer.parseInt(args[0].trim());
             if (port < 1 || port > 65_535) {
-                throw new IllegalArgumentException("port must be in 1..65535: " + args[0]);
+                throw new IllegalArgumentException("port out of range: " + args[0]);
             }
             return port;
         } catch (NumberFormatException ex) {
