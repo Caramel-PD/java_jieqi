@@ -9,13 +9,14 @@
   <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>jieqi :: parent</name>
-  <description>揭棋大作业（AI 博弈方向）—— 对应《揭棋AI博弈_设计文档_v1.0》§5.1 模块规划。
+  <description>揭棋大作业（AI 博弈方向）-- 对应《揭棋AI博弈_设计文档_v1.0》§5.1 模块规划。
     当前仅包含 P0 阶段的 jieqi-common 与 jieqi-rules；
     jieqi-server / jieqi-ai / jieqi-client 在 P1/P2 阶段加入 modules。</description>
 
   <modules>
     <module>jieqi-common</module>
     <module>jieqi-rules</module>
+    <module>jieqi-ai</module>
     <module>jieqi-server</module>
   </modules>
 
