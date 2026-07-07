@@ -52,10 +52,8 @@ public final class ServerMain {
         try {
             JsonObject json = JsonParser.parseString(message).getAsJsonObject();
             String type = json.has("messageType") ? json.get("messageType").getAsString() : "";
-            if ("ping".equals(type)) {
-                JsonObject pong = new JsonObject();
-                pong.addProperty("messageType", "pong");
-                return pong.toString();
+            if ("ping".equalsIgnoreCase(type) && json.has("timestamp")) {
+                return Messages.pong(json.get("timestamp").getAsLong());
             }
             return unsupportedMessage();
         } catch (Exception e) {

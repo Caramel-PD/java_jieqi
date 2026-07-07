@@ -25,8 +25,15 @@ class ServerMainTest {
     @Test
     void pingReturnsPong() {
         assertEquals(
-                "{\"messageType\":\"pong\"}",
-                ServerMain.handleTextMessage("{\"messageType\":\"ping\"}"));
+                "{\"messageType\":\"pong\",\"timestamp\":1712345678901}",
+                ServerMain.handleTextMessage("{\"messageType\":\"ping\",\"timestamp\":1712345678901}"));
+    }
+
+    @Test
+    void messageTypeParsingIsCaseInsensitive() {
+        assertEquals(
+                "{\"messageType\":\"pong\",\"timestamp\":1712345678901}",
+                ServerMain.handleTextMessage("{\"messageType\":\"Ping\",\"timestamp\":1712345678901}"));
     }
 
     @Test
@@ -37,5 +44,8 @@ class ServerMainTest {
         assertEquals(
                 "{\"messageType\":\"error\",\"message\":\"unsupported message\"}",
                 ServerMain.handleTextMessage("not json"));
+        assertEquals(
+                "{\"messageType\":\"error\",\"message\":\"unsupported message\"}",
+                ServerMain.handleTextMessage("{\"messageType\":\"ping\"}"));
     }
 }
