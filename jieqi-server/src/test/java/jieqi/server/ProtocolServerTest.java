@@ -203,15 +203,122 @@ class ProtocolServerTest {
         assertEquals("error", game.red.lastOfType("error").get("messageType").getAsString());
     }
 
+    @Test
+    void redTimeoutMakesBlackWinner() throws Exception {
+        StartedGame game = startGame(80);
+        game.clear();
+
+        waitUntil(() -> !game.red.messagesOfType("timeout").isEmpty()
+                && !game.black.messagesOfType("timeout").isEmpty());
+
+        JsonObject timeout = game.red.lastOfType("timeout");
+        assertEquals("u1", timeout.get("loserId").getAsString());
+        assertEquals("u2", timeout.get("winnerId").getAsString());
+        assertEquals("timeout", timeout.get("reason").getAsString());
+
+        JsonObject gameOver = game.black.lastOfType("gameOver");
+        assertEquals("u2", gameOver.get("winnerId").getAsString());
+        assertEquals("timeout", gameOver.get("reason").getAsString());
+    }
+
+    @Test
+    void legalMoveSwitchesTimerToBlack() throws Exception {
+        StartedGame game = startGame(120);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        assertTrue(game.red.lastOfType("moveResult").get("valid").getAsBoolean());
+
+        waitUntil(() -> !game.red.messagesOfType("timeout").isEmpty()
+                && !game.black.messagesOfType("timeout").isEmpty());
+
+        JsonObject timeout = game.red.lastOfType("timeout");
+        assertEquals("u2", timeout.get("loserId").getAsString());
+        assertEquals("u1", timeout.get("winnerId").getAsString());
+    }
+
+    @Test
+    void resignSendsGameOverToBothPlayers() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        JsonObject redGameOver = game.red.lastOfType("gameOver");
+        JsonObject blackGameOver = game.black.lastOfType("gameOver");
+        assertEquals("u2", redGameOver.get("winnerId").getAsString());
+        assertEquals("resign", redGameOver.get("reason").getAsString());
+        assertEquals("u2", blackGameOver.get("winnerId").getAsString());
+        assertEquals("resign", blackGameOver.get("reason").getAsString());
+    }
+
+    @Test
+    void disconnectSendsGameOverToOnlineOpponent() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+
+        assertTrue(game.red.messagesOfType("gameOver").isEmpty());
+        JsonObject gameOver = game.black.lastOfType("gameOver");
+        assertEquals("u2", gameOver.get("winnerId").getAsString());
+        assertEquals("disconnect", gameOver.get("reason").getAsString());
+    }
+
+    @Test
+    void moveAfterGameOverDoesNotChangeGameState() {
+        StartedGame game = startGame();
+        game.clear();
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        int redGameOverCount = game.red.messagesOfType("gameOver").size();
+        int blackGameOverCount = game.black.messagesOfType("gameOver").size();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+
+        assertEquals(redGameOverCount, game.red.messagesOfType("gameOver").size());
+        assertEquals(blackGameOverCount, game.black.messagesOfType("gameOver").size());
+        assertTrue(game.red.messagesOfType("moveResult").isEmpty());
+        assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+        assertEquals("u2", game.red.lastOfType("gameOver").get("winnerId").getAsString());
+        assertEquals("resign", game.red.lastOfType("gameOver").get("reason").getAsString());
+    }
+
+    @Test
+    void gameOverIsSentOnlyOnce() throws Exception {
+        StartedGame game = startGame(80);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+
+        Thread.sleep(180);
+
+        assertEquals(1, game.red.messagesOfType("gameOver").size());
+        assertEquals(1, game.black.messagesOfType("gameOver").size());
+        assertEquals("resign", game.black.lastOfType("gameOver").get("reason").getAsString());
+    }
+
     private static ProtocolServer newServer() {
+        return newServer(65_000);
+    }
+
+    private static ProtocolServer newServer(long turnTimeoutMs) {
         Core.ServerConfig config = new Core.ServerConfig();
         config.usersFile = null;
         config.autoRegisterOnLogin = true;
+        config.turnTimeoutMs = turnTimeoutMs;
         return new ProtocolServer(config);
     }
 
     private static StartedGame startGame() {
-        ProtocolServer server = newServer();
+        return startGame(65_000);
+    }
+
+    private static StartedGame startGame(long turnTimeoutMs) {
+        ProtocolServer server = newServer(turnTimeoutMs);
         FakeChannel red = new FakeChannel("red");
         FakeChannel black = new FakeChannel("black");
         server.onConnected(red);
@@ -227,6 +334,21 @@ class ProtocolServerTest {
         server.onMessage(red, "{\"messageType\":\"Ready\"}");
         server.onMessage(black, "{\"messageType\":\"Ready\"}");
         return new StartedGame(server, red, black);
+    }
+
+    private static void waitUntil(Condition condition) throws Exception {
+        long deadline = System.currentTimeMillis() + 1_500;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.matches()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertTrue(condition.matches(), "condition was not met before timeout");
+    }
+
+    private interface Condition {
+        boolean matches();
     }
 
     private static String move(String fromX, int fromY, String toX, int toY, boolean isFlip) {
