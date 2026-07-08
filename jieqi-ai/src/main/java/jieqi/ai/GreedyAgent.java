@@ -7,9 +7,19 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * L1 baseline agent: prefer captures, otherwise play the first legal move.
+ * L1 baseline agent: prefer higher-value captures, otherwise play the first legal move.
  */
 public final class GreedyAgent implements Agent {
+
+    private final PositionEvaluator evaluator;
+
+    public GreedyAgent() {
+        this(new PositionEvaluator());
+    }
+
+    public GreedyAgent(PositionEvaluator evaluator) {
+        this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
+    }
 
     @Override
     public Optional<Move> selectMove(PlayerView view, TimeBudget budget) {
@@ -20,9 +30,15 @@ public final class GreedyAgent implements Agent {
         if (legalMoves.isEmpty()) {
             return Optional.empty();
         }
-        return legalMoves.stream()
-                .filter(move -> view.isOccupied(move.to()))
-                .findFirst()
-                .or(() -> Optional.of(legalMoves.get(0)));
+        Move bestCapture = null;
+        int bestCaptureValue = 0;
+        for (Move move : legalMoves) {
+            int captureValue = evaluator.captureValue(view, move);
+            if (captureValue > bestCaptureValue) {
+                bestCapture = move;
+                bestCaptureValue = captureValue;
+            }
+        }
+        return Optional.of(bestCapture != null ? bestCapture : legalMoves.get(0));
     }
 }

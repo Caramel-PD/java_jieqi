@@ -3,11 +3,14 @@ package jieqi.ai;
 import jieqi.common.Color;
 import jieqi.common.Coord;
 import jieqi.common.Move;
+import jieqi.common.PieceType;
 import jieqi.rules.BoardSnapshot;
+import jieqi.rules.CellState;
 import jieqi.rules.RuleEngine;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * The board state visible to one AI player.
@@ -40,5 +43,17 @@ public final class PlayerView {
 
     public boolean isOccupied(Coord coord) {
         return !informationBoard.cellAt(Objects.requireNonNull(coord, "coord")).isEmpty();
+    }
+
+    public boolean isHidden(Coord coord) {
+        return informationBoard.cellAt(Objects.requireNonNull(coord, "coord")) instanceof CellState.Hidden;
+    }
+
+    public Optional<PieceType> revealedPieceTypeAt(Coord coord) {
+        CellState cell = informationBoard.cellAt(Objects.requireNonNull(coord, "coord"));
+        if (cell instanceof CellState.Revealed revealed) {
+            return Optional.of(revealed.type());
+        }
+        return Optional.empty();
     }
 }
