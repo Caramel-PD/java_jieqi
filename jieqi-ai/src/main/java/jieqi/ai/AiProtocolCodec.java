@@ -35,7 +35,9 @@ public final class AiProtocolCodec {
                 requireString(root, "blackPlayerId"),
                 yourColor,
                 Json.optBool(root, "firstHand", false),
-                PlayerView.of(board, yourColor));
+                PlayerView.of(board, Json.optBool(root, "firstHand", false)
+                        ? yourColor
+                        : yourColor.opposite()));
     }
 
     public static String encodeMove(PlayerView view, Move move) {

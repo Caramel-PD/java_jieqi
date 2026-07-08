@@ -27,6 +27,7 @@ public final class AiClient {
     private volatile MoveResultMessage lastMoveResult;
     private volatile Optional<Move> lastSelectedMove = Optional.empty();
     private volatile String lastMoveJson;
+    private volatile boolean stopped;
 
     public AiClient(AiClientConfig config, Agent agent) {
         this(config, agent, json -> {
@@ -78,17 +79,39 @@ public final class AiClient {
         String messageType = Json.messageType(object);
         if ("gamestart".equals(messageType)) {
             gameState = AiProtocolCodec.parseGameStart(json);
-            if (gameState.firstHand()) {
+            if (gameState.firstHand() && !stopped) {
                 selectAndSendMove();
+            }
+        } else if ("loginresult".equals(messageType)) {
+            if (Json.optBool(object, "success", false) && !stopped) {
+                sendStartMatch();
+            }
+        } else if ("matchsuccess".equals(messageType)) {
+            if (!stopped) {
+                sendReady();
             }
         } else if ("moveresult".equals(messageType)) {
             lastMoveResult = AiProtocolCodec.parseMoveResult(json);
+            if (lastMoveResult.valid() && gameState != null && !stopped) {
+                PlayerView updatedView = gameState.playerView().apply(lastMoveResult);
+                gameState = new AiGameState(
+                        gameState.redPlayerId(),
+                        gameState.blackPlayerId(),
+                        gameState.yourColor(),
+                        gameState.firstHand(),
+                        updatedView);
+                if (updatedView.sideToMove() == gameState.yourColor()) {
+                    selectAndSendMove();
+                }
+            }
+        } else if ("gameover".equals(messageType) || "timeout".equals(messageType)) {
+            stopped = true;
         }
     }
 
     public Optional<Move> selectAndSendMove() {
         AiGameState state = gameState;
-        if (state == null) {
+        if (state == null || stopped || state.playerView().sideToMove() != state.yourColor()) {
             return Optional.empty();
         }
         Optional<Move> selected = agent.selectMove(
@@ -119,6 +142,10 @@ public final class AiClient {
         return Optional.ofNullable(lastMoveJson);
     }
 
+    public boolean stopped() {
+        return stopped;
+    }
+
     private void send(JsonObject json) {
         outbound.accept(GSON.toJson(json));
     }
@@ -132,6 +159,8 @@ public final class AiClient {
     private final class Listener implements WebSocket.Listener {
         @Override
         public void onOpen(WebSocket webSocket) {
+            outbound = json -> webSocket.sendText(json, true);
+            sendLogin();
             webSocket.request(1);
         }
 
