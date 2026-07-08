@@ -1,101 +1,97 @@
 package client;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * E-01 单元测试 – 验证消息 JSON 字段正确性
- * 覆盖：ping, Login, register, startMatch, Ready, move, Resign
- */
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 public class MessageBuilderTest {
 
-    // ---------- 1. ping ----------
     @Test
     public void testPing() {
-        String json = MessageBuilder.buildPing();
-        assertTrue(json.contains("\"messageType\":\"ping\""));
-        assertTrue(json.contains("\"timestamp\""));
+        JsonObject json = parse(MessageBuilder.buildPing());
+        assertEquals("ping", json.get("messageType").getAsString());
+        assertTrue(json.has("timestamp"));
     }
 
-    // ---------- 2. Login（必须含 timestamp） ----------
     @Test
     public void testLogin() {
-        String json = MessageBuilder.buildLogin("e_test_1", "123456");
-        assertTrue(json.contains("\"messageType\":\"Login\""));
-        assertTrue(json.contains("\"userId\":\"e_test_1\""));
-        assertTrue(json.contains("\"password\":\"123456\""));
-        assertTrue(json.contains("\"timestamp\""));
-        assertFalse(json.contains("\"nickname\""));
+        JsonObject json = parse(MessageBuilder.buildLogin("e_test_1", "123456"));
+        assertEquals("Login", json.get("messageType").getAsString());
+        assertEquals("e_test_1", json.get("userId").getAsString());
+        assertEquals("123456", json.get("password").getAsString());
+        assertFalse(json.has("nickname"));
+        assertFalse(json.has("timestamp"));
     }
 
-    // ---------- 3. register（必须含 timestamp） ----------
     @Test
     public void testRegister() {
-        String json = MessageBuilder.buildRegister("e_test_1", "123456", "E测试用户");
-        assertTrue(json.contains("\"messageType\":\"register\""));
-        assertTrue(json.contains("\"userId\":\"e_test_1\""));
-        assertTrue(json.contains("\"password\":\"123456\""));
-        assertTrue(json.contains("\"nickname\":\"E测试用户\""));
-        assertTrue(json.contains("\"timestamp\""));
+        JsonObject json = parse(MessageBuilder.buildRegister("e_test_1", "123456", "E测试用户"));
+        assertEquals("register", json.get("messageType").getAsString());
+        assertEquals("e_test_1", json.get("userId").getAsString());
+        assertEquals("123456", json.get("password").getAsString());
+        assertEquals("E测试用户", json.get("nickname").getAsString());
+        assertFalse(json.has("timestamp"));
     }
 
-    // ---------- 4. startMatch ----------
     @Test
     public void testStartMatch() {
-        String json = MessageBuilder.buildStartMatch();
-        assertEquals("{\"messageType\":\"startMatch\"}", json);
+        JsonObject json = parse(MessageBuilder.buildStartMatch());
+        assertEquals("startMatch", json.get("messageType").getAsString());
     }
 
-    // ---------- 5. Ready ----------
     @Test
     public void testReady() {
-        String json = MessageBuilder.buildReady();
-        assertEquals("{\"messageType\":\"Ready\"}", json);
+        JsonObject json = parse(MessageBuilder.buildReady());
+        assertEquals("Ready", json.get("messageType").getAsString());
     }
 
-    // ---------- 6. move（额外覆盖） ----------
     @Test
     public void testMove() {
-        String json = MessageBuilder.buildMove("a", 0, "b", 1, true);
-        assertTrue(json.contains("\"messageType\":\"move\""));
-        assertTrue(json.contains("\"fromX\":\"a\""));
-        assertTrue(json.contains("\"fromY\":0"));
-        assertTrue(json.contains("\"toX\":\"b\""));
-        assertTrue(json.contains("\"toY\":1"));
-        assertTrue(json.contains("\"isFlip\":true"));
+        JsonObject json = parse(MessageBuilder.buildMove("a", 0, "b", 1, true));
+        assertEquals("move", json.get("messageType").getAsString());
+        assertEquals("a", json.get("fromX").getAsString());
+        assertEquals(0, json.get("fromY").getAsInt());
+        assertEquals("b", json.get("toX").getAsString());
+        assertEquals(1, json.get("toY").getAsInt());
+        assertTrue(json.get("isFlip").getAsBoolean());
     }
 
-    // ---------- 7. flipOnly ----------
     @Test
     public void testFlipOnly() {
-        String json = MessageBuilder.buildFlipOnly("b", 3);
-        assertTrue(json.contains("\"fromX\":\"b\""));
-        assertTrue(json.contains("\"fromY\":3"));
-        assertTrue(json.contains("\"toX\":\"b\""));
-        assertTrue(json.contains("\"toY\":3"));
-        assertTrue(json.contains("\"isFlip\":true"));
+        JsonObject json = parse(MessageBuilder.buildFlipOnly("b", 3));
+        assertEquals("b", json.get("fromX").getAsString());
+        assertEquals(3, json.get("fromY").getAsInt());
+        assertEquals("b", json.get("toX").getAsString());
+        assertEquals(3, json.get("toY").getAsInt());
+        assertTrue(json.get("isFlip").getAsBoolean());
     }
 
-    // ---------- 8. Resign ----------
     @Test
     public void testResign() {
-        String json = MessageBuilder.buildResign();
-        assertEquals("{\"messageType\":\"Resign\"}", json);
+        JsonObject json = parse(MessageBuilder.buildResign());
+        assertEquals("Resign", json.get("messageType").getAsString());
     }
 
-    // ---------- 9. cancelMatch（可选） ----------
     @Test
     public void testCancelMatch() {
-        String json = MessageBuilder.buildCancelMatch();
-        assertEquals("{\"messageType\":\"cancelMatch\"}", json);
+        JsonObject json = parse(MessageBuilder.buildCancelMatch());
+        assertEquals("cancelMatch", json.get("messageType").getAsString());
     }
 
-    // ---------- 10. requestFirstHand（可选） ----------
     @Test
     public void testRequestFirstHand() {
-        String jsonTrue = MessageBuilder.buildRequestFirstHand(true);
-        assertTrue(jsonTrue.contains("\"wannaFirst\":true"));
-        String jsonFalse = MessageBuilder.buildRequestFirstHand(false);
-        assertTrue(jsonFalse.contains("\"wannaFirst\":false"));
+        JsonObject yes = parse(MessageBuilder.buildRequestFirstHand(true));
+        JsonObject no = parse(MessageBuilder.buildRequestFirstHand(false));
+        assertEquals("requestFirstHand", yes.get("messageType").getAsString());
+        assertTrue(yes.get("wannaFirst").getAsBoolean());
+        assertFalse(no.get("wannaFirst").getAsBoolean());
+    }
+
+    private static JsonObject parse(String json) {
+        return JsonParser.parseString(json).getAsJsonObject();
     }
 }
