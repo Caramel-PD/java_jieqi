@@ -80,6 +80,79 @@ class AiClientTest {
     }
 
     @Test
+    void loginSuccessStartsMatchAndMatchSuccessSendsReady() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), outbound::add);
+
+        client.handleServerMessage("""
+                {"messageType":"loginResult","success":true,"message":"ok","userId":"ai"}
+                """);
+        client.handleServerMessage("""
+                {"messageType":"matchSuccess","roomId":"r","opponentId":"p","opponentNickname":"P"}
+                """);
+
+        assertEquals("startMatch", messageType(outbound.get(0)));
+        assertEquals("Ready", messageType(outbound.get(1)));
+    }
+
+    @Test
+    void moveResultUpdatesPlayerView() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.of(Move.parse("a0a1"))),
+                outbound::add);
+
+        client.handleServerMessage(gameStart(true));
+        client.handleServerMessage("""
+                {"messageType":"moveResult","success":true,"valid":true,
+                 "move":{"fromX":"a","fromY":0,"toX":"a","toY":1,"isFlip":true},
+                 "flipResult":"rook"}
+                """);
+
+        PlayerView view = client.gameState().orElseThrow().playerView();
+        assertFalse(view.isOccupied(jieqi.common.Coord.parse("a0")));
+        assertEquals(jieqi.common.PieceType.ROOK,
+                view.revealedPieceTypeAt(jieqi.common.Coord.parse("a1")).orElseThrow());
+    }
+
+    @Test
+    void opponentMoveResultTriggersMoveWhenItBecomesOurTurn() {
+        List<String> outbound = new ArrayList<>();
+        FixedAgent agent = new FixedAgent(Optional.of(Move.parse("a0a1")));
+        AiClient client = new AiClient(AiClientConfig.defaults(), agent, outbound::add);
+
+        client.handleServerMessage(gameStart(false));
+        client.handleServerMessage("""
+                {"messageType":"moveResult","success":true,"valid":true,
+                 "move":{"fromX":"e","fromY":6,"toX":"e","toY":5,"isFlip":true},
+                 "flipResult":"pawn"}
+                """);
+
+        assertEquals(1, agent.calls);
+        assertEquals("move", messageType(outbound.get(0)));
+    }
+
+    @Test
+    void gameOverStopsFurtherMoves() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.of(Move.parse("a0a1"))),
+                outbound::add);
+
+        client.handleServerMessage(gameStart(true));
+        client.handleServerMessage("""
+                {"messageType":"gameOver","winner":"black","reason":"resign","winnerId":"b1"}
+                """);
+        Optional<Move> afterStop = client.selectAndSendMove();
+
+        assertTrue(client.stopped());
+        assertTrue(afterStop.isEmpty());
+        assertEquals(1, outbound.size(), "only the firstHand move should have been sent");
+    }
+
+    @Test
     void doesNotExposeServerInternalTypes() {
         assertNoServerTypes(AiClient.class);
         assertNoServerTypes(AiClientConfig.class);
@@ -114,6 +187,7 @@ class AiClientTest {
                    {"x":"a","y":0,"piece":"rook","visible":false},
                    {"x":"e","y":0,"piece":"king","visible":true},
                    {"x":"e","y":3,"piece":"pawn","visible":false},
+                   {"x":"e","y":6,"piece":"pawn","visible":false},
                    {"x":"e","y":9,"piece":"king","visible":true}
                  ]}
                 """.formatted(firstHand);

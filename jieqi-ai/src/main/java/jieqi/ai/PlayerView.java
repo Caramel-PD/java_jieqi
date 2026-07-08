@@ -33,6 +33,19 @@ public final class PlayerView {
         return new PlayerView(informationBoard, sideToMove);
     }
 
+    public PlayerView apply(MoveResultMessage moveResult) {
+        Objects.requireNonNull(moveResult, "moveResult");
+        if (!moveResult.valid()) {
+            return this;
+        }
+        PieceType flipAs = moveResult.isFlip()
+                ? moveResult.flipResult().orElseThrow(
+                () -> new IllegalArgumentException("valid flip moveResult missing flipResult"))
+                : null;
+        BoardSnapshot next = informationBoard.apply(moveResult.move().from(), moveResult.move().to(), flipAs);
+        return new PlayerView(next, sideToMove.opposite());
+    }
+
     public Color sideToMove() {
         return sideToMove;
     }
