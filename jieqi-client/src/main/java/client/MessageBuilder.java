@@ -1,57 +1,69 @@
 package client;
 
+import com.google.gson.JsonObject;
+
 public class MessageBuilder {
 
-    // ping
     public static String buildPing() {
-        return String.format("{\"messageType\":\"ping\",\"timestamp\":%d}", System.currentTimeMillis());
+        JsonObject json = base("ping");
+        json.addProperty("timestamp", System.currentTimeMillis());
+        return json.toString();
     }
 
-    // Login（带 timestamp）
     public static String buildLogin(String userId, String password) {
-        return String.format("{\"messageType\":\"Login\",\"userId\":\"%s\",\"password\":\"%s\",\"timestamp\":%d}",
-                userId, password, System.currentTimeMillis());
+        JsonObject json = base("Login");
+        json.addProperty("userId", userId);
+        json.addProperty("password", password);
+        return json.toString();
     }
 
-    // register（带 timestamp）
     public static String buildRegister(String userId, String password, String nickname) {
-        return String.format("{\"messageType\":\"register\",\"userId\":\"%s\",\"password\":\"%s\",\"nickname\":\"%s\",\"timestamp\":%d}",
-                userId, password, nickname, System.currentTimeMillis());
+        JsonObject json = base("register");
+        json.addProperty("userId", userId);
+        json.addProperty("password", password);
+        json.addProperty("nickname", nickname);
+        return json.toString();
     }
 
-    // startMatch
     public static String buildStartMatch() {
-        return "{\"messageType\":\"startMatch\"}";
+        return base("startMatch").toString();
     }
 
-    // cancelMatch
     public static String buildCancelMatch() {
-        return "{\"messageType\":\"cancelMatch\"}";
+        return base("cancelMatch").toString();
     }
 
-    // requestFirstHand
     public static String buildRequestFirstHand(boolean wannaFirst) {
-        return String.format("{\"messageType\":\"requestFirstHand\",\"wannaFirst\":%b}", wannaFirst);
+        JsonObject json = base("requestFirstHand");
+        json.addProperty("wannaFirst", wannaFirst);
+        return json.toString();
     }
 
-    // move
     public static String buildMove(String fromX, int fromY, String toX, int toY, boolean isFlip) {
-        return String.format("{\"messageType\":\"move\",\"fromX\":\"%s\",\"fromY\":%d,\"toX\":\"%s\",\"toY\":%d,\"isFlip\":%b}",
-                fromX, fromY, toX, toY, isFlip);
+        JsonObject json = base("move");
+        json.addProperty("fromX", fromX);
+        json.addProperty("fromY", fromY);
+        json.addProperty("toX", toX);
+        json.addProperty("toY", toY);
+        json.addProperty("isFlip", isFlip);
+        return json.toString();
     }
 
-    // flipOnly
     public static String buildFlipOnly(String x, int y) {
         return buildMove(x, y, x, y, true);
     }
 
-    // Ready
     public static String buildReady() {
-        return "{\"messageType\":\"Ready\"}";
+        return base("Ready").toString();
     }
 
-    // Resign
     public static String buildResign() {
-        return "{\"messageType\":\"Resign\"}";
+        return base("Resign").toString();
+    }
+
+    private static JsonObject base(String messageType) {
+        JsonObject json = new JsonObject();
+        json.addProperty("messageType", messageType);
+        return json;
     }
 }
