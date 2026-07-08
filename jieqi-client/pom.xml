@@ -1,90 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
- xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
- xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-
-    <modelVersion>4.0.0</modelVersion>
-
-    <groupId>client</groupId>
-    <artifactId>jieqi-client</artifactId>
-    <version>1.0</version>
-
-
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-
-        <!-- 主类 -->
-        <javafx.version>21</javafx.version>
-    </properties>
-
-
-    <dependencies>
-    <!-- JavaFX -->
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>cn.jieqi</groupId>
+    <artifactId>jieqi-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+  <artifactId>jieqi-client</artifactId>
+  <name>jieqi :: client</name>
+  <description>Command line WebSocket client skeleton for Jieqi.</description>
+  <dependencies>
     <dependency>
-        <groupId>org.openjfx</groupId>
-        <artifactId>javafx-controls</artifactId>
-        <version>${javafx.version}</version>
+      <groupId>org.java-websocket</groupId>
+      <artifactId>Java-WebSocket</artifactId>
+      <version>1.5.7</version>
     </dependency>
     <dependency>
-        <groupId>org.openjfx</groupId>
-        <artifactId>javafx-fxml</artifactId>
-        <version>${javafx.version}</version>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.10.1</version>
     </dependency>
-
-    <!-- WebSocket客户端 -->
     <dependency>
-        <groupId>org.java-websocket</groupId>
-        <artifactId>Java-WebSocket</artifactId>
-        <version>1.5.6</version>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
     </dependency>
-
-    <!-- JSON处理（你用String拼接，可以不用Jackson，但留着也无妨） -->
-    <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
-        <artifactId>jackson-databind</artifactId>
-        <version>2.17.2</version>
-    </dependency>
-
-    <!-- JUnit 5 测试 -->
-    <dependency>
-        <groupId>org.junit.jupiter</groupId>
-        <artifactId>junit-jupiter</artifactId>
-        <version>5.10.2</version>
-        <scope>test</scope>
-    </dependency>
-</dependencies>
-
-
-
-    <build>
-
-        <plugins>
-
-            <!-- JavaFX启动插件 -->
-            <plugin>
-
-                <groupId>org.openjfx</groupId>
-                <artifactId>javafx-maven-plugin</artifactId>
-                <version>0.0.8</version>
-
-
-                <configuration>
-
-                    <!-- 你的Main类位置 -->
-                    <mainClass>
-                        client.Main
-                    </mainClass>
-
-                </configuration>
-
-
-            </plugin>
-
-
-        </plugins>
-
-
-    </build>
-
-
+  </dependencies>
 </project>
