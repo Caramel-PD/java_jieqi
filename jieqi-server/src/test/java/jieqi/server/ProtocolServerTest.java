@@ -325,6 +325,68 @@ class ProtocolServerTest {
     }
 
     @Test
+    void registerSuccess() {
+        ProtocolServer server = newServer(false);  // 关闭自动注册，单独测 register
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        server.onMessage(channel,
+                "{\"messageType\":\"register\",\"userId\":\"newUser\",\"password\":\"pw\",\"nickname\":\"新用户\"}");
+
+        JsonObject result = channel.lastOfType("loginResult");
+        assertTrue(result.get("success").getAsBoolean());
+        assertEquals("newUser", result.get("userId").getAsString());
+        assertEquals("ok", result.get("message").getAsString());
+    }
+
+    @Test
+    void duplicateLoginRejected() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        FakeChannel c2 = new FakeChannel("c2");
+        server.onConnected(c1);
+        server.onConnected(c2);
+        server.onMessage(c1, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        c1.clear();
+
+        server.onMessage(c2, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+
+        JsonObject error = c2.lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_DUPLICATE_LOGIN, error.get("code").getAsInt());
+        assertEquals("duplicate login", error.get("message").getAsString());
+        assertTrue(c1.messagesOfType("error").isEmpty());
+    }
+
+    @Test
+    void fromEqualsToMoveRejected() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "b", 2, true));
+
+        JsonObject rejected = game.red.lastOfType("moveResult");
+        assertFalse(rejected.get("valid").getAsBoolean());
+        JsonObject error = game.red.lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_ILLEGAL_MOVE, error.get("code").getAsInt());
+        assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
+    void oversizedFrameClosesConnection() {
+        ProtocolServer server = newServer();
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        String bigMessage = "{\"messageType\":\"ping\",\"timestamp\":1,\"pad\":\""
+                + "x".repeat(1100) + "\"}";
+        assertTrue(bigMessage.getBytes(StandardCharsets.UTF_8).length > ProtocolServer.MAX_INBOUND_BYTES);
+
+        server.onMessage(channel, bigMessage);
+
+        assertFalse(channel.isOpen());
+    }
+
+    @Test
     void legalMoveIsRecorded(@TempDir Path recordsDir) throws Exception {
         StartedGame game = startGame(65_000, recordsDir);
         game.clear();
@@ -375,17 +437,25 @@ class ProtocolServerTest {
     }
 
     private static ProtocolServer newServer() {
-        return newServer(65_000);
+        return newServer(65_000, null, true);
+    }
+
+    private static ProtocolServer newServer(boolean autoRegisterOnLogin) {
+        return newServer(65_000, null, autoRegisterOnLogin);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs) {
-        return newServer(turnTimeoutMs, null);
+        return newServer(turnTimeoutMs, null, true);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir) {
+        return newServer(turnTimeoutMs, recordsDir, true);
+    }
+
+    private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir, boolean autoRegisterOnLogin) {
         Core.ServerConfig config = new Core.ServerConfig();
         config.usersFile = null;
-        config.autoRegisterOnLogin = true;
+        config.autoRegisterOnLogin = autoRegisterOnLogin;
         config.turnTimeoutMs = turnTimeoutMs;
         config.recordsDir = recordsDir;
         return new ProtocolServer(config);
