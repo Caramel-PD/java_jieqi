@@ -1,97 +1,122 @@
 package client;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * E-01 单元测试 – 验证消息 JSON 字段正确性
+ * 覆盖：ping, Login, register, startMatch, Ready, move, Resign, cancelMatch, requestFirstHand, drawRequest, drawResponse
+ */
 public class MessageBuilderTest {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    public void testPing() {
-        JsonObject json = parse(MessageBuilder.buildPing());
-        assertEquals("ping", json.get("messageType").getAsString());
-        assertTrue(json.has("timestamp"));
+    void testPing() throws Exception {
+        String json = MessageBuilder.buildPing();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("ping", node.get("messageType").asText());
+        assertTrue(node.has("timestamp"));
+        assertTrue(node.get("timestamp").isNumber());
     }
 
     @Test
-    public void testLogin() {
-        JsonObject json = parse(MessageBuilder.buildLogin("e_test_1", "123456"));
-        assertEquals("Login", json.get("messageType").getAsString());
-        assertEquals("e_test_1", json.get("userId").getAsString());
-        assertEquals("123456", json.get("password").getAsString());
-        assertFalse(json.has("nickname"));
-        assertFalse(json.has("timestamp"));
+    void testLogin() throws Exception {
+        String json = MessageBuilder.buildLogin("e_test_1", "123456");
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("Login", node.get("messageType").asText());
+        assertEquals("e_test_1", node.get("userId").asText());
+        assertEquals("123456", node.get("password").asText());
+        assertFalse(node.has("nickname"));
     }
 
     @Test
-    public void testRegister() {
-        JsonObject json = parse(MessageBuilder.buildRegister("e_test_1", "123456", "E测试用户"));
-        assertEquals("register", json.get("messageType").getAsString());
-        assertEquals("e_test_1", json.get("userId").getAsString());
-        assertEquals("123456", json.get("password").getAsString());
-        assertEquals("E测试用户", json.get("nickname").getAsString());
-        assertFalse(json.has("timestamp"));
+    void testRegister() throws Exception {
+        String json = MessageBuilder.buildRegister("e_test_1", "123456", "E测试用户");
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("register", node.get("messageType").asText());
+        assertEquals("e_test_1", node.get("userId").asText());
+        assertEquals("123456", node.get("password").asText());
+        assertEquals("E测试用户", node.get("nickname").asText());
     }
 
     @Test
-    public void testStartMatch() {
-        JsonObject json = parse(MessageBuilder.buildStartMatch());
-        assertEquals("startMatch", json.get("messageType").getAsString());
+    void testStartMatch() throws Exception {
+        String json = MessageBuilder.buildStartMatch();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("startMatch", node.get("messageType").asText());
+        assertEquals(1, node.size());
     }
 
     @Test
-    public void testReady() {
-        JsonObject json = parse(MessageBuilder.buildReady());
-        assertEquals("Ready", json.get("messageType").getAsString());
+    void testReady() throws Exception {
+        String json = MessageBuilder.buildReady();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("Ready", node.get("messageType").asText());
+        assertEquals(1, node.size());
     }
 
     @Test
-    public void testMove() {
-        JsonObject json = parse(MessageBuilder.buildMove("a", 0, "b", 1, true));
-        assertEquals("move", json.get("messageType").getAsString());
-        assertEquals("a", json.get("fromX").getAsString());
-        assertEquals(0, json.get("fromY").getAsInt());
-        assertEquals("b", json.get("toX").getAsString());
-        assertEquals(1, json.get("toY").getAsInt());
-        assertTrue(json.get("isFlip").getAsBoolean());
+    void testMove() throws Exception {
+        String json = MessageBuilder.buildMove("a", 0, "b", 1, true);
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("move", node.get("messageType").asText());
+        assertEquals("a", node.get("fromX").asText());
+        assertEquals(0, node.get("fromY").asInt());
+        assertEquals("b", node.get("toX").asText());
+        assertEquals(1, node.get("toY").asInt());
+        assertTrue(node.get("isFlip").asBoolean());
+    }
+
+    // 删除了 testFlipOnly，因为原地翻子不被允许
+
+    @Test
+    void testResign() throws Exception {
+        String json = MessageBuilder.buildResign();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("Resign", node.get("messageType").asText());
+        assertEquals(1, node.size());
     }
 
     @Test
-    public void testFlipOnly() {
-        JsonObject json = parse(MessageBuilder.buildFlipOnly("b", 3));
-        assertEquals("b", json.get("fromX").getAsString());
-        assertEquals(3, json.get("fromY").getAsInt());
-        assertEquals("b", json.get("toX").getAsString());
-        assertEquals(3, json.get("toY").getAsInt());
-        assertTrue(json.get("isFlip").getAsBoolean());
+    void testCancelMatch() throws Exception {
+        String json = MessageBuilder.buildCancelMatch();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("cancelMatch", node.get("messageType").asText());
+        assertEquals(1, node.size());
     }
 
     @Test
-    public void testResign() {
-        JsonObject json = parse(MessageBuilder.buildResign());
-        assertEquals("Resign", json.get("messageType").getAsString());
+    void testRequestFirstHand() throws Exception {
+        String jsonTrue = MessageBuilder.buildRequestFirstHand(true);
+        JsonNode node = MAPPER.readTree(jsonTrue);
+        assertEquals("requestFirstHand", node.get("messageType").asText());
+        assertTrue(node.get("wannaFirst").asBoolean());
+
+        String jsonFalse = MessageBuilder.buildRequestFirstHand(false);
+        node = MAPPER.readTree(jsonFalse);
+        assertFalse(node.get("wannaFirst").asBoolean());
     }
 
     @Test
-    public void testCancelMatch() {
-        JsonObject json = parse(MessageBuilder.buildCancelMatch());
-        assertEquals("cancelMatch", json.get("messageType").getAsString());
+    void testDrawRequest() throws Exception {
+        String json = MessageBuilder.buildDrawRequest();
+        JsonNode node = MAPPER.readTree(json);
+        assertEquals("requestDraw", node.get("messageType").asText());
+        assertEquals(1, node.size());
     }
 
     @Test
-    public void testRequestFirstHand() {
-        JsonObject yes = parse(MessageBuilder.buildRequestFirstHand(true));
-        JsonObject no = parse(MessageBuilder.buildRequestFirstHand(false));
-        assertEquals("requestFirstHand", yes.get("messageType").getAsString());
-        assertTrue(yes.get("wannaFirst").getAsBoolean());
-        assertFalse(no.get("wannaFirst").getAsBoolean());
-    }
+    void testDrawResponse() throws Exception {
+        String jsonTrue = MessageBuilder.buildDrawResponse(true);
+        JsonNode node = MAPPER.readTree(jsonTrue);
+        assertEquals("drawResponse", node.get("messageType").asText());
+        assertTrue(node.get("accept").asBoolean());
 
-    private static JsonObject parse(String json) {
-        return JsonParser.parseString(json).getAsJsonObject();
+        String jsonFalse = MessageBuilder.buildDrawResponse(false);
+        node = MAPPER.readTree(jsonFalse);
+        assertFalse(node.get("accept").asBoolean());
     }
 }

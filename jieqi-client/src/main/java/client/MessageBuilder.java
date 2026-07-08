@@ -1,69 +1,90 @@
 package client;
 
-import com.google.gson.JsonObject;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+import java.time.Instant;
 
 public class MessageBuilder {
-
-    public static String buildPing() {
-        JsonObject json = base("ping");
-        json.addProperty("timestamp", System.currentTimeMillis());
-        return json.toString();
-    }
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static String buildLogin(String userId, String password) {
-        JsonObject json = base("Login");
-        json.addProperty("userId", userId);
-        json.addProperty("password", password);
-        return json.toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "Login");
+        node.put("userId", userId);
+        node.put("password", password);
+        return node.toString();
     }
 
     public static String buildRegister(String userId, String password, String nickname) {
-        JsonObject json = base("register");
-        json.addProperty("userId", userId);
-        json.addProperty("password", password);
-        json.addProperty("nickname", nickname);
-        return json.toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "register");
+        node.put("userId", userId);
+        node.put("password", password);
+        node.put("nickname", nickname);
+        return node.toString();
     }
 
     public static String buildStartMatch() {
-        return base("startMatch").toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "startMatch");
+        return node.toString();
     }
 
     public static String buildCancelMatch() {
-        return base("cancelMatch").toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "cancelMatch");
+        return node.toString();
     }
 
     public static String buildRequestFirstHand(boolean wannaFirst) {
-        JsonObject json = base("requestFirstHand");
-        json.addProperty("wannaFirst", wannaFirst);
-        return json.toString();
-    }
-
-    public static String buildMove(String fromX, int fromY, String toX, int toY, boolean isFlip) {
-        JsonObject json = base("move");
-        json.addProperty("fromX", fromX);
-        json.addProperty("fromY", fromY);
-        json.addProperty("toX", toX);
-        json.addProperty("toY", toY);
-        json.addProperty("isFlip", isFlip);
-        return json.toString();
-    }
-
-    public static String buildFlipOnly(String x, int y) {
-        return buildMove(x, y, x, y, true);
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "requestFirstHand");
+        node.put("wannaFirst", wannaFirst);
+        return node.toString();
     }
 
     public static String buildReady() {
-        return base("Ready").toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "Ready");
+        return node.toString();
+    }
+
+    public static String buildMove(String fromX, int fromY, String toX, int toY, boolean isFlip) {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "move");
+        node.put("fromX", fromX);
+        node.put("fromY", fromY);
+        node.put("toX", toX);
+        node.put("toY", toY);
+        node.put("isFlip", isFlip);
+        return node.toString();
+    }
+
+    public static String buildPing() {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "ping");
+        node.put("timestamp", Instant.now().toEpochMilli());
+        return node.toString();
     }
 
     public static String buildResign() {
-        return base("Resign").toString();
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "Resign");
+        return node.toString();
     }
 
-    private static JsonObject base(String messageType) {
-        JsonObject json = new JsonObject();
-        json.addProperty("messageType", messageType);
-        return json;
+    // ========== 扩展消息（设计文档§4.7） ==========
+    public static String buildDrawRequest() {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "requestDraw");
+        return node.toString();
+    }
+
+    public static String buildDrawResponse(boolean accept) {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("messageType", "drawResponse");
+        node.put("accept", accept);
+        return node.toString();
     }
 }
