@@ -11,6 +11,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -22,6 +24,8 @@ public final class AiClient {
 
     private final AiClientConfig config;
     private final Agent agent;
+    private final Consumer<String> logger;
+    private final CountDownLatch stoppedLatch = new CountDownLatch(1);
     private Consumer<String> outbound;
     private volatile AiGameState gameState;
     private volatile MoveResultMessage lastMoveResult;
@@ -32,13 +36,19 @@ public final class AiClient {
     public AiClient(AiClientConfig config, Agent agent) {
         this(config, agent, json -> {
             throw new IllegalStateException("client is not connected");
-        });
+        }, System.out::println);
     }
 
     public AiClient(AiClientConfig config, Agent agent, Consumer<String> outbound) {
+        this(config, agent, outbound, ignored -> {
+        });
+    }
+
+    public AiClient(AiClientConfig config, Agent agent, Consumer<String> outbound, Consumer<String> logger) {
         this.config = Objects.requireNonNull(config, "config");
         this.agent = Objects.requireNonNull(agent, "agent");
         this.outbound = Objects.requireNonNull(outbound, "outbound");
+        this.logger = Objects.requireNonNull(logger, "logger");
     }
 
     public CompletableFuture<WebSocket> connect() {
@@ -79,19 +89,32 @@ public final class AiClient {
         String messageType = Json.messageType(object);
         if ("gamestart".equals(messageType)) {
             gameState = AiProtocolCodec.parseGameStart(json);
+            log("game start");
             if (gameState.firstHand() && !stopped) {
                 selectAndSendMove();
             }
         } else if ("loginresult".equals(messageType)) {
             if (Json.optBool(object, "success", false) && !stopped) {
+                log("login success");
                 sendStartMatch();
+            } else {
+                stop("login failed");
+            }
+        } else if ("registerresult".equals(messageType)) {
+            if (Json.optBool(object, "success", false) && !stopped) {
+                log("register success");
+                sendStartMatch();
+            } else {
+                stop("register failed");
             }
         } else if ("matchsuccess".equals(messageType)) {
             if (!stopped) {
+                log("match success");
                 sendReady();
             }
         } else if ("moveresult".equals(messageType)) {
             lastMoveResult = AiProtocolCodec.parseMoveResult(json);
+            log("move result");
             if (lastMoveResult.valid() && gameState != null && !stopped) {
                 PlayerView updatedView = gameState.playerView().apply(lastMoveResult);
                 gameState = new AiGameState(
@@ -105,7 +128,7 @@ public final class AiClient {
                 }
             }
         } else if ("gameover".equals(messageType) || "timeout".equals(messageType)) {
-            stopped = true;
+            stop("game over");
         }
     }
 
@@ -122,6 +145,7 @@ public final class AiClient {
             String json = AiProtocolCodec.encodeMove(state.playerView(), move);
             lastMoveJson = json;
             outbound.accept(json);
+            log("move sent");
         });
         return selected;
     }
@@ -146,8 +170,28 @@ public final class AiClient {
         return stopped;
     }
 
+    public void awaitStopped() throws InterruptedException {
+        stoppedLatch.await();
+    }
+
+    public boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
+        return stoppedLatch.await(timeout, unit);
+    }
+
     private void send(JsonObject json) {
         outbound.accept(GSON.toJson(json));
+    }
+
+    private void stop(String message) {
+        if (!stopped) {
+            stopped = true;
+            log(message);
+            stoppedLatch.countDown();
+        }
+    }
+
+    private void log(String message) {
+        logger.accept(message);
     }
 
     private static JsonObject base(String messageType) {
@@ -160,7 +204,12 @@ public final class AiClient {
         @Override
         public void onOpen(WebSocket webSocket) {
             outbound = json -> webSocket.sendText(json, true);
-            sendLogin();
+            log("connected");
+            if (config.registerOnConnect()) {
+                sendRegister();
+            } else {
+                sendLogin();
+            }
             webSocket.request(1);
         }
 
@@ -173,6 +222,8 @@ public final class AiClient {
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
+            log("connection error: " + error.getMessage());
+            stop("game over");
             error.printStackTrace(System.err);
         }
     }
