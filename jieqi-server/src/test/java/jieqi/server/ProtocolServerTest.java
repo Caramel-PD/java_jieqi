@@ -4,7 +4,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -301,15 +305,89 @@ class ProtocolServerTest {
         assertEquals("resign", game.black.lastOfType("gameOver").get("reason").getAsString());
     }
 
+    @Test
+    void resignWritesParseableGameRecordWithGameOverFields(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        JsonObject record = readRecord(recordsDir, "room_1");
+        assertEquals("room_1", record.get("roomId").getAsString());
+        assertEquals("u1", record.get("redPlayerId").getAsString());
+        assertEquals("u2", record.get("blackPlayerId").getAsString());
+        assertTrue(record.get("startTime").getAsLong() > 0);
+        assertTrue(record.get("endTime").getAsLong() >= record.get("startTime").getAsLong());
+        assertEquals("black", record.get("winner").getAsString());
+        assertEquals("u2", record.get("winnerId").getAsString());
+        assertEquals("resign", record.get("reason").getAsString());
+        assertTrue(record.get("moves").isJsonArray());
+    }
+
+    @Test
+    void legalMoveIsRecorded(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        JsonArray moves = readRecord(recordsDir, "room_1").getAsJsonArray("moves");
+        assertEquals(1, moves.size());
+        JsonObject move = moves.get(0).getAsJsonObject();
+        assertEquals(1, move.get("moveNo").getAsInt());
+        assertEquals("red", move.get("mover").getAsString());
+        assertEquals("b", move.get("fromX").getAsString());
+        assertEquals(2, move.get("fromY").getAsInt());
+        assertEquals("e", move.get("toX").getAsString());
+        assertEquals(2, move.get("toY").getAsInt());
+        assertTrue(move.get("valid").getAsBoolean());
+        assertTrue(move.get("isFlip").getAsBoolean());
+        assertFalse(move.get("flipResult").isJsonNull());
+        assertTrue(move.has("capturedPiece"));
+        assertTrue(move.get("timestamp").getAsLong() > 0);
+    }
+
+    @Test
+    void illegalMoveIsRecordedWithoutSwitchingTurn(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "c", 3, true));
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        JsonArray moves = readRecord(recordsDir, "room_1").getAsJsonArray("moves");
+        assertEquals(2, moves.size());
+        JsonObject illegalMove = moves.get(0).getAsJsonObject();
+        assertEquals("red", illegalMove.get("mover").getAsString());
+        assertEquals("b", illegalMove.get("fromX").getAsString());
+        assertEquals(2, illegalMove.get("fromY").getAsInt());
+        assertEquals("c", illegalMove.get("toX").getAsString());
+        assertEquals(3, illegalMove.get("toY").getAsInt());
+        assertFalse(illegalMove.get("valid").getAsBoolean());
+        assertTrue(illegalMove.get("flipResult").isJsonNull());
+        assertTrue(illegalMove.get("capturedPiece").isJsonNull());
+
+        JsonObject legalMove = moves.get(1).getAsJsonObject();
+        assertEquals("red", legalMove.get("mover").getAsString());
+        assertTrue(legalMove.get("valid").getAsBoolean());
+    }
+
     private static ProtocolServer newServer() {
         return newServer(65_000);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs) {
+        return newServer(turnTimeoutMs, null);
+    }
+
+    private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir) {
         Core.ServerConfig config = new Core.ServerConfig();
         config.usersFile = null;
         config.autoRegisterOnLogin = true;
         config.turnTimeoutMs = turnTimeoutMs;
+        config.recordsDir = recordsDir;
         return new ProtocolServer(config);
     }
 
@@ -318,7 +396,11 @@ class ProtocolServerTest {
     }
 
     private static StartedGame startGame(long turnTimeoutMs) {
-        ProtocolServer server = newServer(turnTimeoutMs);
+        return startGame(turnTimeoutMs, null);
+    }
+
+    private static StartedGame startGame(long turnTimeoutMs, Path recordsDir) {
+        ProtocolServer server = newServer(turnTimeoutMs, recordsDir);
         FakeChannel red = new FakeChannel("red");
         FakeChannel black = new FakeChannel("black");
         server.onConnected(red);
@@ -334,6 +416,13 @@ class ProtocolServerTest {
         server.onMessage(red, "{\"messageType\":\"Ready\"}");
         server.onMessage(black, "{\"messageType\":\"Ready\"}");
         return new StartedGame(server, red, black);
+    }
+
+    private static JsonObject readRecord(Path recordsDir, String roomId) throws Exception {
+        Path file = recordsDir.resolve(roomId + ".json");
+        assertTrue(Files.exists(file), "record file should exist: " + file);
+        String json = Files.readString(file, StandardCharsets.UTF_8);
+        return JsonParser.parseString(json).getAsJsonObject();
     }
 
     private static void waitUntil(Condition condition) throws Exception {

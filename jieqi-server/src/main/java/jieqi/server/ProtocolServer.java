@@ -11,6 +11,7 @@ import jieqi.rules.RuleEngine;
 
 import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
@@ -139,6 +140,7 @@ final class ProtocolServer {
         session.state = Core.SessionState.AUTHED;
         onlineUsers.put(userId, session);
         session.send(Messages.loginResult(true, "ok", userId));
+        System.out.println("player login: userId=" + userId + ", remote=" + session.channel.remote());
     }
 
     private void handleRegister(Core.Session session, JsonObject json) {
@@ -171,14 +173,15 @@ final class ProtocolServer {
                 return;
             }
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
-                    config.initialBoardMode, config.turnTimeoutMs, scheduler);
+                    config.initialBoardMode, config.turnTimeoutMs, config.recordsDir, scheduler);
             opponent.room = room;
             session.room = room;
             opponent.state = Core.SessionState.IN_ROOM;
             session.state = Core.SessionState.IN_ROOM;
             opponent.send(Messages.matchSuccess(room.id, session.userId, session.nickname));
             session.send(Messages.matchSuccess(room.id, opponent.userId, opponent.nickname));
-            System.out.println("match success: " + opponent.userId + " vs " + session.userId + " in " + room.id);
+            System.out.println("match success: roomId=" + room.id
+                    + ", redPlayerId=" + opponent.userId + ", blackPlayerId=" + session.userId);
         }
     }
 
@@ -299,6 +302,7 @@ final class ProtocolServer {
         final Core.Session black;
         final String initialBoardMode;
         final long turnTimeoutMs;
+        final Path recordsDir;
         final ScheduledExecutorService scheduler;
         final Core.ServerBoard board = new Core.ServerBoard();
         final Random rng = new SecureRandom();
@@ -313,14 +317,16 @@ final class ProtocolServer {
         private String winnerId;
         private String loserId;
         private String finishReason;
+        private GameRecorder recorder;
 
         GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode,
-                 long turnTimeoutMs, ScheduledExecutorService scheduler) {
+                 long turnTimeoutMs, Path recordsDir, ScheduledExecutorService scheduler) {
             this.id = id;
             this.red = red;
             this.black = black;
             this.initialBoardMode = initialBoardMode;
             this.turnTimeoutMs = turnTimeoutMs;
+            this.recordsDir = recordsDir;
             this.scheduler = scheduler;
         }
 
@@ -383,6 +389,8 @@ final class ProtocolServer {
                     result.flipType(), moverCapture));
             opponentOf(session).send(Messages.moveResult(true, move.from, move.to, result.isFlip(),
                     result.flipType(), opponentCapture));
+            recordMove(mover, move, result.isFlip(), true, result.flipType(), moverCapture);
+            logMoveResult(session, move, true, result.isFlip(), result.flipType(), moverCapture);
             if (result.kingCaptured()) {
                 finishGame("checkmate", session, opponentOf(session), false);
                 return;
@@ -403,6 +411,8 @@ final class ProtocolServer {
                 return;
             }
             if (!started) {
+                System.out.println("disconnect before gameStart: roomId=" + id
+                        + ", disconnectedPlayerId=" + session.userId);
                 finished = true;
                 cancelTurnTimer();
                 return;
@@ -421,6 +431,9 @@ final class ProtocolServer {
         private void start() {
             started = true;
             turn = Color.RED;
+            recorder = GameRecorder.start(id, red.userId, black.userId);
+            System.out.println("gameStart: roomId=" + id + ", redPlayerId=" + red.userId
+                    + ", blackPlayerId=" + black.userId + ", currentTurn=" + turn.json());
             red.send(Messages.gameStart(red.userId, black.userId, Color.RED,
                     board.snapshot(), initialBoardMode));
             black.send(Messages.gameStart(red.userId, black.userId, Color.BLACK,
@@ -454,6 +467,8 @@ final class ProtocolServer {
                 if (finished || !started || loser != sessionOf(turn)) {
                     return;
                 }
+                System.out.println("timeout: roomId=" + id + ", loserId=" + loser.userId
+                        + ", winnerId=" + opponentOf(loser).userId);
                 finishGame("timeout", opponentOf(loser), loser, true);
             }
         }
@@ -467,11 +482,26 @@ final class ProtocolServer {
             winnerId = winner.userId;
             loserId = loser.userId;
             finishReason = reason;
+            Color winnerColor = winner == red ? Color.RED : Color.BLACK;
+
+            if ("resign".equals(reason)) {
+                System.out.println("resign: roomId=" + id + ", loserId=" + loserId + ", winnerId=" + winnerId);
+            } else if ("disconnect".equals(reason)) {
+                System.out.println("disconnect: roomId=" + id
+                        + ", disconnectedPlayerId=" + loserId + ", winnerId=" + winnerId);
+            }
+            if (recorder != null) {
+                recorder.finish(winnerColor.json(), winnerId, reason);
+                try {
+                    recorder.writeTo(recordsDir);
+                } catch (Exception ex) {
+                    System.err.println("write game record failed: roomId=" + id + ", error=" + ex.getMessage());
+                }
+            }
 
             if (sendTimeout) {
                 broadcastOpen(Messages.timeout(loserId, winnerId));
             }
-            Color winnerColor = winner == red ? Color.RED : Color.BLACK;
             String gameOver = Messages.gameOver(winnerColor.json(), reason, winnerId);
             if ("disconnect".equals(reason)) {
                 sendIfOpen(winner, gameOver);
@@ -485,6 +515,8 @@ final class ProtocolServer {
         private void rejectMove(Core.Session session, MoveMessage move, int code, String message) {
             session.send(Messages.moveResult(false, move.from, move.to, move.clientFlip, null, null));
             session.send(Messages.error(code, message));
+            recordMove(colorOf(session), move, move.clientFlip, false, null, null);
+            logMoveResult(session, move, false, move.clientFlip, null, null);
         }
 
         private Color colorOf(Core.Session session) {
@@ -510,6 +542,26 @@ final class ProtocolServer {
                 return "NULL";
             }
             return captured.json();
+        }
+
+        private void recordMove(Color mover, MoveMessage move, boolean isFlip, boolean valid,
+                                PieceType flipResult, String capturedPiece) {
+            if (recorder != null) {
+                recorder.recordMove(mover, move.from, move.to, isFlip, valid, flipResult, capturedPiece);
+            }
+        }
+
+        private void logMoveResult(Core.Session session, MoveMessage move, boolean valid, boolean isFlip,
+                                   PieceType flipResult, String capturedPiece) {
+            System.out.println("moveResult: roomId=" + id + ", mover=" + session.userId
+                    + ", from=" + coordText(move.from) + ", to=" + coordText(move.to)
+                    + ", valid=" + valid + ", isFlip=" + isFlip
+                    + ", flipResult=" + (flipResult == null ? "null" : flipResult.json())
+                    + ", capturedPiece=" + capturedPiece);
+        }
+
+        private static String coordText(Coord coord) {
+            return String.valueOf((char) ('a' + coord.file())) + coord.rank();
         }
 
         private void broadcast(String json) {
