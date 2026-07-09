@@ -1,3 +1,8 @@
+/*
+ * 文件功能：服务端基础配置、会话、账户存储和权威棋盘基础构件。
+ * 所属模块：jieqi-server。
+ * 使用场景：ProtocolServer、ServerMain 与测试代码共享本文件中的配置读取、连接抽象和棋盘应用能力。
+ */
 package jieqi.server;
 
 import jieqi.common.Color;
@@ -42,20 +47,44 @@ public final class Core {
         public Path recordsDir = Path.of("records");  // §9.2
         public Path usersFile = null;                 // null=纯内存（测试）；生产 users.json
 
+        /**
+         * 从当前进程环境变量创建服务端配置。
+         *
+         * @return 应用环境变量覆盖后的服务端配置。
+         * @throws RuntimeException 当前实现不主动抛出异常。
+         * @apiNote 使用示例：{@code Core.ServerConfig config = Core.ServerConfig.fromEnv();}
+         */
         public static ServerConfig fromEnv() {
+            return fromEnv(System.getenv());
+        }
+
+        /**
+         * 从指定环境变量表创建配置，生产路径传入真实环境，测试路径传入可控 Map。
+         *
+         * @param env 环境变量键值表，缺失或非法数值会回落到默认值。
+         * @return 应用环境变量覆盖后的服务端配置。
+         * @throws RuntimeException 当前实现不主动抛出异常。
+         * @apiNote 使用示例：{@code ServerConfig.fromEnv(Map.of("JIEQI_AUTO_READY_AFTER_MS", "50"))}。
+         */
+        static ServerConfig fromEnv(Map<String, String> env) {
             ServerConfig c = new ServerConfig();
-            String home = System.getenv().getOrDefault("JIEQI_HOME", ".");
-            c.port = envInt("JIEQI_PORT", c.port);
-            c.turnTimeoutMs = envInt("JIEQI_TURN_TIMEOUT_MS", (int) c.turnTimeoutMs);
-            c.firstHandWindowMs = envInt("JIEQI_FIRSTHAND_WINDOW_MS", (int) c.firstHandWindowMs);
-            c.autoRegisterOnLogin = !"false".equalsIgnoreCase(System.getenv("JIEQI_AUTO_REGISTER"));
+            String home = env.getOrDefault("JIEQI_HOME", ".");
+            c.port = envInt(env, "JIEQI_PORT", c.port);
+            c.turnTimeoutMs = envInt(env, "JIEQI_TURN_TIMEOUT_MS", (int) c.turnTimeoutMs);
+            c.firstHandWindowMs = envInt(env, "JIEQI_FIRSTHAND_WINDOW_MS", (int) c.firstHandWindowMs);
+            c.autoReadyAfterMs = envInt(env, "JIEQI_AUTO_READY_AFTER_MS", (int) c.autoReadyAfterMs);
+            c.autoRegisterOnLogin = !"false".equalsIgnoreCase(env.get("JIEQI_AUTO_REGISTER"));
             c.recordsDir = Path.of(home, "records");
             c.usersFile = Path.of(home, "users.json");
             return c;
         }
 
         private static int envInt(String key, int def) {
-            String v = System.getenv(key);
+            return envInt(System.getenv(), key, def);
+        }
+
+        private static int envInt(Map<String, String> env, String key, int def) {
+            String v = env.get(key);
             if (v == null || v.isBlank()) return def;
             try {
                 return Integer.parseInt(v.trim());

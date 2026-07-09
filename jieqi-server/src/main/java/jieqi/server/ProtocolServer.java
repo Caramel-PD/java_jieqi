@@ -289,7 +289,7 @@ final class ProtocolServer {
             // 队首玩家默认先成为红方，requestFirstHand 会在 gameStart 前按意愿调整。
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
                     config.initialBoardMode, config.turnTimeoutMs, config.firstHandWindowMs,
-                    config.recordsDir,
+                    config.autoReadyAfterMs, config.recordsDir,
                     config.repetitionLimit, config.repetitionMinRepeats, config.noCaptureLimitHalfMoves,
                     scheduler);
             rooms.put(room.id, room);
@@ -301,6 +301,7 @@ final class ProtocolServer {
             session.send(Messages.matchSuccess(room.id, opponent.userId, opponent.nickname));
             System.out.println("match success: roomId=" + room.id
                     + ", redPlayerId=" + opponent.userId + ", blackPlayerId=" + session.userId);
+            room.scheduleAutoReady();
         }
     }
 
@@ -625,6 +626,8 @@ final class ProtocolServer {
         final long turnTimeoutMs;
         /** Ready 后先手协商窗口，正数表示延迟开局，0 或负数保持立即开局兼容。 */
         final long firstHandWindowMs;
+        /** 匹配成功后的自动 Ready 兜底时间，0 或负数表示关闭，保持手动 Ready 协议不变。 */
+        final long autoReadyAfterMs;
         /** 棋谱目录，允许为 null 以禁用测试落盘。 */
         final Path recordsDir;
         /** 重复/无吃子判定器，每局单独持有，避免跨房间状态污染。 */
@@ -651,6 +654,8 @@ final class ProtocolServer {
         private boolean finished;
         /** 先手协商窗口任务，开局、断线或终局时需要取消以避免延迟误启动。 */
         private ScheduledFuture<?> firstHandWindowTask;
+        /** 自动 Ready 兜底任务，开局、断线、终局或双方已 Ready 后取消。 */
+        private ScheduledFuture<?> autoReadyTask;
         /** 当前回合计时任务，切换回合或终局时必须取消。 */
         private ScheduledFuture<?> turnTimer;
         /** 胜方玩家 ID；和棋时为 null。 */
@@ -671,6 +676,7 @@ final class ProtocolServer {
          * @param initialBoardMode 初始棋盘输出模式。
          * @param turnTimeoutMs 单步超时时间。
          * @param firstHandWindowMs Ready 后先手协商窗口，0 或负数表示立即开局。
+         * @param autoReadyAfterMs 匹配成功后的自动 Ready 兜底时间，0 或负数表示关闭。
          * @param recordsDir 棋谱目录。
          * @param repetitionLimit 连续重复阈值。
          * @param repetitionMinRepeats 局面重复最小次数。
@@ -680,7 +686,7 @@ final class ProtocolServer {
          * @apiNote 使用示例：匹配成功时由 {@link ProtocolServer#handleStartMatch(Core.Session)} 创建。
          */
         GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode,
-                 long turnTimeoutMs, long firstHandWindowMs,
+                 long turnTimeoutMs, long firstHandWindowMs, long autoReadyAfterMs,
                  Path recordsDir,
                  int repetitionLimit, int repetitionMinRepeats, int noCaptureLimitHalfMoves,
                  ScheduledExecutorService scheduler) {
@@ -690,10 +696,32 @@ final class ProtocolServer {
             this.initialBoardMode = initialBoardMode;
             this.turnTimeoutMs = turnTimeoutMs;
             this.firstHandWindowMs = firstHandWindowMs;
+            this.autoReadyAfterMs = autoReadyAfterMs;
             this.recordsDir = recordsDir;
             this.repetitionTracker = new RepetitionTracker(
                     repetitionLimit, repetitionMinRepeats, noCaptureLimitHalfMoves);
             this.scheduler = scheduler;
+        }
+
+        /**
+         * 在匹配成功后启动自动 Ready 兜底任务。
+         *
+         * <p>该任务只补齐缺失的 Ready，不直接开局；开局仍交给
+         * {@link #scheduleStartAfterFirstHandWindow()}，确保先手协商窗口的时序不会被绕过。</p>
+         *
+         * @throws RuntimeException 当调度器拒绝任务时可能抛出。
+         * @apiNote 使用示例：房间放入 rooms 且双方收到 matchSuccess 后调用。
+         */
+        synchronized void scheduleAutoReady() {
+            if (autoReadyAfterMs <= 0 || started || finished || autoReadyTask != null) {
+                return;
+            }
+            System.out.println("auto ready scheduled: roomId=" + id + ", delayMs=" + autoReadyAfterMs);
+            autoReadyTask = scheduler.schedule(() -> {
+                synchronized (this) {
+                    autoReadyMissingPlayers();
+                }
+            }, autoReadyAfterMs, TimeUnit.MILLISECONDS);
         }
 
         /**
@@ -720,6 +748,36 @@ final class ProtocolServer {
             }
             if (redReady && blackReady) {
                 System.out.println("both players ready in " + id);
+                scheduleStartAfterFirstHandWindow();
+            }
+        }
+
+        /**
+         * 补齐尚未发送 Ready 的玩家，并复用原有开局流程。
+         *
+         * @throws RuntimeException 当发送 roomInfo 或调度先手窗口失败时可能抛出。
+         * @apiNote 使用示例：由 {@link #scheduleAutoReady()} 安排的定时任务触发。
+         */
+        private void autoReadyMissingPlayers() {
+            if (finished || started) {
+                return;
+            }
+            boolean changed = false;
+            if (!redReady) {
+                redReady = true;
+                changed = true;
+                // 自动 Ready 也发送 roomInfo，让客户端看到的对手准备状态与手动 Ready 一致。
+                black.send(Messages.roomInfo(true));
+                System.out.println("auto ready player: roomId=" + id + ", userId=" + red.userId);
+            }
+            if (!blackReady) {
+                blackReady = true;
+                changed = true;
+                red.send(Messages.roomInfo(true));
+                System.out.println("auto ready player: roomId=" + id + ", userId=" + black.userId);
+            }
+            if (changed && redReady && blackReady) {
+                System.out.println("both players ready in " + id + " by auto ready fallback");
                 scheduleStartAfterFirstHandWindow();
             }
         }
@@ -836,6 +894,7 @@ final class ProtocolServer {
                 System.out.println("disconnect before gameStart: roomId=" + id
                         + ", disconnectedPlayerId=" + session.userId);
                 finished = true;
+                cancelAutoReady();
                 cancelFirstHandWindow();
                 cancelTurnTimer();
                 return;
@@ -878,6 +937,7 @@ final class ProtocolServer {
          * @apiNote 使用示例：双方 Ready 后由 {@link #ready(Core.Session)} 调用。
          */
         private void start() {
+            cancelAutoReady();
             cancelFirstHandWindow();
             resolveFirstHand();
             started = true;
@@ -906,6 +966,7 @@ final class ProtocolServer {
             if (started || finished || firstHandWindowTask != null) {
                 return;
             }
+            cancelAutoReady();
             if (firstHandWindowMs <= 0) {
                 start();
                 return;
@@ -931,6 +992,18 @@ final class ProtocolServer {
             if (firstHandWindowTask != null) {
                 firstHandWindowTask.cancel(false);
                 firstHandWindowTask = null;
+            }
+        }
+
+        /**
+         * 取消自动 Ready 兜底任务。
+         *
+         * <p>双方已经 Ready、断线或终局后都不应再补 Ready；统一取消可避免旧任务延迟触发 gameStart。</p>
+         */
+        private void cancelAutoReady() {
+            if (autoReadyTask != null) {
+                autoReadyTask.cancel(false);
+                autoReadyTask = null;
             }
         }
 
@@ -1031,6 +1104,7 @@ final class ProtocolServer {
             }
             // 先设置 finished，确保后续发送消息、写棋谱或断线回调再次进入时不会重复 gameOver。
             finished = true;
+            cancelAutoReady();
             cancelFirstHandWindow();
             cancelTurnTimer();
             winnerId = winner.userId;
@@ -1103,6 +1177,7 @@ final class ProtocolServer {
             }
             // 和棋同样走 finished 幂等保护，但 winnerId/loserId 必须保持 null。
             finished = true;
+            cancelAutoReady();
             cancelFirstHandWindow();
             cancelTurnTimer();
             winnerId = null;
