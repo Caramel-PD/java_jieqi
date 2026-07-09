@@ -15,7 +15,7 @@ public record SelfPlayExperiment(List<SelfPlayResult> results, long seed, int ma
     public static final String CSV_HEADER =
             "redAgent,blackAgent,games,redWins,blackWins,draws,averagePlies,seed,maxPlies";
 
-    private static final String[] AGENTS = {"random", "greedy", "tactical"};
+    private static final String[] AGENTS = {"random", "greedy", "tactical", "expecti"};
 
     public SelfPlayExperiment {
         results = List.copyOf(Objects.requireNonNull(results, "results"));

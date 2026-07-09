@@ -67,6 +67,7 @@ public final class AiMain {
             case "random" -> new RandomAgent();
             case "greedy" -> new GreedyAgent();
             case "tactical" -> new TacticalAgent();
+            case "expecti" -> new ExpectiAgent();
             default -> throw new IllegalArgumentException("unsupported agent: " + agentType);
         };
     }
@@ -80,7 +81,7 @@ public final class AiMain {
                   --userId ai
                   --password ai
                   --nickname AI
-                  --agent random|greedy|tactical
+                  --agent random|greedy|tactical|expecti
                   --thinkTimeMillis 10000
                   --register
 
