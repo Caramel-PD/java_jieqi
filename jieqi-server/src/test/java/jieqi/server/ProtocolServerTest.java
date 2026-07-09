@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -380,6 +381,81 @@ class ProtocolServerTest {
         JsonObject error = game.red.lastOfType("error");
         assertEquals(ProtocolServer.ERROR_ILLEGAL_MOVE, error.get("code").getAsInt());
         assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
+    void autoReadyAfterMsDefaultZeroDoesNotStartWithoutReady() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 0);
+
+        Thread.sleep(90);
+
+        assertTrue(game.red.messagesOfType("gameStart").isEmpty());
+        assertTrue(game.black.messagesOfType("gameStart").isEmpty());
+    }
+
+    @Test
+    void autoReadyStartsGameWhenBothPlayersDoNotSendReady() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 0, 50);
+
+        waitUntil(() -> !game.red.messagesOfType("gameStart").isEmpty()
+                && !game.black.messagesOfType("gameStart").isEmpty());
+
+        JsonObject redStart = game.red.lastOfType("gameStart");
+        assertEquals("u1", redStart.get("redPlayerId").getAsString());
+        assertEquals("u2", redStart.get("blackPlayerId").getAsString());
+    }
+
+    @Test
+    void autoReadyCompletesMissingReadyWhenOnePlayerIsReady() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 0, 50);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Ready\"}");
+        assertTrue(game.red.messagesOfType("gameStart").isEmpty());
+        assertTrue(game.black.messagesOfType("gameStart").isEmpty());
+
+        waitUntil(() -> !game.red.messagesOfType("gameStart").isEmpty()
+                && !game.black.messagesOfType("gameStart").isEmpty());
+
+        assertFalse(game.red.messagesOfType("roomInfo").isEmpty());
+        assertFalse(game.black.messagesOfType("roomInfo").isEmpty());
+    }
+
+    @Test
+    void autoReadyStillWaitsForFirstHandWindowBeforeGameStart() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 150, 40);
+
+        Thread.sleep(90);
+        assertTrue(game.red.messagesOfType("roomInfo").size() >= 1);
+        assertTrue(game.black.messagesOfType("roomInfo").size() >= 1);
+        assertTrue(game.red.messagesOfType("gameStart").isEmpty());
+        assertTrue(game.black.messagesOfType("gameStart").isEmpty());
+
+        waitUntil(() -> !game.red.messagesOfType("gameStart").isEmpty()
+                && !game.black.messagesOfType("gameStart").isEmpty());
+    }
+
+    @Test
+    void autoReadyDoesNotStartAfterDisconnectBeforeGameStart() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 0, 50);
+
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+        Thread.sleep(120);
+
+        assertTrue(game.red.messagesOfType("gameStart").isEmpty());
+        assertTrue(game.black.messagesOfType("gameStart").isEmpty());
+        game.server.onMessage(game.black, "{\"messageType\":\"serverStatus\"}");
+        JsonObject room = game.black.lastOfType("serverStatus").getAsJsonArray("rooms")
+                .get(0).getAsJsonObject();
+        assertFalse(room.get("started").getAsBoolean());
+        assertTrue(room.get("finished").getAsBoolean());
+    }
+
+    @Test
+    void envLoadsAutoReadyAfterMs() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of("JIEQI_AUTO_READY_AFTER_MS", "75"));
+
+        assertEquals(75, config.autoReadyAfterMs);
     }
 
     @Test
@@ -813,38 +889,46 @@ class ProtocolServerTest {
     }
 
     private static ProtocolServer newServer() {
-        return newServer(65_000, null, true, 0, 80);
+        return newServer(65_000, null, true, 0, 80, 0);
     }
 
     private static ProtocolServer newServer(boolean autoRegisterOnLogin) {
-        return newServer(65_000, null, autoRegisterOnLogin, 0, 80);
+        return newServer(65_000, null, autoRegisterOnLogin, 0, 80, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs) {
-        return newServer(turnTimeoutMs, null, true, 0, 80);
+        return newServer(turnTimeoutMs, null, true, 0, 80, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir) {
-        return newServer(turnTimeoutMs, recordsDir, true, 0, 80);
+        return newServer(turnTimeoutMs, recordsDir, true, 0, 80, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir, boolean autoRegisterOnLogin) {
-        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, 0, 80);
+        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, 0, 80, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir,
                                             boolean autoRegisterOnLogin, long firstHandWindowMs) {
-        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, firstHandWindowMs, 80);
+        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, firstHandWindowMs, 80, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir,
                                             boolean autoRegisterOnLogin, long firstHandWindowMs,
                                             int noCaptureLimitHalfMoves) {
+        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, firstHandWindowMs,
+                noCaptureLimitHalfMoves, 0);
+    }
+
+    private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir,
+                                            boolean autoRegisterOnLogin, long firstHandWindowMs,
+                                            int noCaptureLimitHalfMoves, long autoReadyAfterMs) {
         Core.ServerConfig config = new Core.ServerConfig();
         config.usersFile = null;
         config.autoRegisterOnLogin = autoRegisterOnLogin;
         config.turnTimeoutMs = turnTimeoutMs;
         config.firstHandWindowMs = firstHandWindowMs;
+        config.autoReadyAfterMs = autoReadyAfterMs;
         config.recordsDir = recordsDir;
         config.noCaptureLimitHalfMoves = noCaptureLimitHalfMoves;
         return new ProtocolServer(config);
@@ -904,6 +988,13 @@ class ProtocolServerTest {
 
     private static StartedGame matchedGame(long turnTimeoutMs, Path recordsDir, long firstHandWindowMs) {
         ProtocolServer server = newServer(turnTimeoutMs, recordsDir, true, firstHandWindowMs);
+        return matchedGame(server);
+    }
+
+    private static StartedGame matchedGame(long turnTimeoutMs, Path recordsDir, long firstHandWindowMs,
+                                           long autoReadyAfterMs) {
+        ProtocolServer server = newServer(turnTimeoutMs, recordsDir, true, firstHandWindowMs,
+                80, autoReadyAfterMs);
         return matchedGame(server);
     }
 
