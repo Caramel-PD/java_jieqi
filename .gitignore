@@ -8,5 +8,8 @@ target/
 .vscode/
 *.iml
 
+records/
+users.json
+
 .DS_Store
 Thumbs.db

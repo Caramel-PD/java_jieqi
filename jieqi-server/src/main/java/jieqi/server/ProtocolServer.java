@@ -13,7 +13,9 @@ import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
@@ -40,6 +42,7 @@ final class ProtocolServer {
     private final Core.AccountStore accounts;
     private final Map<Core.ClientChannel, Core.Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, Core.Session> onlineUsers = new ConcurrentHashMap<>();
+    private final Map<String, GameRoom> rooms = new ConcurrentHashMap<>();
     private final Deque<Core.Session> waiting = new ArrayDeque<>();
     private final AtomicInteger roomSequence = new AtomicInteger(1);
     private final ScheduledExecutorService scheduler;
@@ -112,6 +115,7 @@ final class ProtocolServer {
                 case "move" -> handleMove(session, json);
                 case "ping" -> handlePing(session, json);
                 case "resign" -> handleResign(session);
+                case "serverstatus" -> handleServerStatus(session);
                 default -> System.out.println("ignore unknown messageType: " + type);
             }
         } catch (IllegalArgumentException ex) {
@@ -174,6 +178,7 @@ final class ProtocolServer {
             }
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
                     config.initialBoardMode, config.turnTimeoutMs, config.recordsDir, scheduler);
+            rooms.put(room.id, room);
             opponent.room = room;
             session.room = room;
             opponent.state = Core.SessionState.IN_ROOM;
@@ -235,6 +240,18 @@ final class ProtocolServer {
         } else {
             System.out.println("ignore Resign outside room: " + session.userId);
         }
+    }
+
+    private void handleServerStatus(Core.Session session) {
+        int waitingUsers;
+        synchronized (this) {
+            waitingUsers = waiting.size();
+        }
+        List<Messages.RoomStatus> roomStatuses = new ArrayList<>();
+        for (GameRoom room : rooms.values()) {
+            roomStatuses.add(room.status());
+        }
+        session.send(Messages.serverStatus(onlineUsers.size(), waitingUsers, roomStatuses));
     }
 
     private boolean requireLogin(Core.Session session) {
@@ -422,6 +439,11 @@ final class ProtocolServer {
                 return;
             }
             finishGame("disconnect", winner, session, false);
+        }
+
+        synchronized Messages.RoomStatus status() {
+            return new Messages.RoomStatus(id, red.userId, black.userId,
+                    started, finished, turn.json());
         }
 
         private Core.Session opponentOf(Core.Session session) {

@@ -98,6 +98,104 @@ class ProtocolServerTest {
     }
 
     @Test
+    void emptyServerStatusIsAvailableBeforeLogin() {
+        ProtocolServer server = newServer();
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        server.onMessage(channel, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = channel.lastOfType("serverStatus");
+        assertEquals(0, status.get("onlineUsers").getAsInt());
+        assertEquals(0, status.get("waitingUsers").getAsInt());
+        assertEquals(0, status.getAsJsonArray("rooms").size());
+    }
+
+    @Test
+    void serverStatusCountsOnlineUsersAfterLogin() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        FakeChannel c2 = new FakeChannel("c2");
+        server.onConnected(c1);
+        server.onConnected(c2);
+        server.onMessage(c1, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        server.onMessage(c2, "{\"messageType\":\"Login\",\"userId\":\"u2\",\"password\":\"p2\"}");
+        c1.clear();
+
+        server.onMessage(c1, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = c1.lastOfType("serverStatus");
+        assertEquals(2, status.get("onlineUsers").getAsInt());
+        assertEquals(0, status.get("waitingUsers").getAsInt());
+        assertEquals(0, status.getAsJsonArray("rooms").size());
+    }
+
+    @Test
+    void serverStatusCountsWaitingUserAfterStartMatch() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        server.onConnected(c1);
+        server.onMessage(c1, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        c1.clear();
+
+        server.onMessage(c1, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(c1, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = c1.lastOfType("serverStatus");
+        assertEquals(1, status.get("onlineUsers").getAsInt());
+        assertEquals(1, status.get("waitingUsers").getAsInt());
+        assertEquals(0, status.getAsJsonArray("rooms").size());
+    }
+
+    @Test
+    void serverStatusListsRoomAfterMatch() {
+        ProtocolServer server = newServer();
+        FakeChannel red = new FakeChannel("red");
+        FakeChannel black = new FakeChannel("black");
+        server.onConnected(red);
+        server.onConnected(black);
+        server.onMessage(red, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        server.onMessage(black, "{\"messageType\":\"Login\",\"userId\":\"u2\",\"password\":\"p2\"}");
+        red.clear();
+        black.clear();
+
+        server.onMessage(red, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(black, "{\"messageType\":\"startMatch\"}");
+        red.clear();
+        server.onMessage(red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = red.lastOfType("serverStatus");
+        assertEquals(2, status.get("onlineUsers").getAsInt());
+        assertEquals(0, status.get("waitingUsers").getAsInt());
+        JsonArray rooms = status.getAsJsonArray("rooms");
+        assertEquals(1, rooms.size());
+        JsonObject room = rooms.get(0).getAsJsonObject();
+        assertEquals("room_1", room.get("roomId").getAsString());
+        assertEquals("u1", room.get("redPlayerId").getAsString());
+        assertEquals("u2", room.get("blackPlayerId").getAsString());
+        assertFalse(room.get("started").getAsBoolean());
+        assertFalse(room.get("finished").getAsBoolean());
+        assertEquals("red", room.get("currentTurn").getAsString());
+    }
+
+    @Test
+    void serverStatusShowsStartedAfterBothReady() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = game.red.lastOfType("serverStatus");
+        JsonArray rooms = status.getAsJsonArray("rooms");
+        assertEquals(1, rooms.size());
+        JsonObject room = rooms.get(0).getAsJsonObject();
+        assertEquals("room_1", room.get("roomId").getAsString());
+        assertTrue(room.get("started").getAsBoolean());
+        assertFalse(room.get("finished").getAsBoolean());
+        assertEquals("red", room.get("currentTurn").getAsString());
+    }
+
+    @Test
     void twoLoggedInUsersStartMatchAndReceiveMatchSuccess() {
         ProtocolServer server = newServer();
         FakeChannel c1 = new FakeChannel("c1");
