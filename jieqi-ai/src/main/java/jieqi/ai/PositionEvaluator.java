@@ -8,8 +8,6 @@ import jieqi.rules.BoardSnapshot;
 import jieqi.rules.CellState;
 import jieqi.rules.RuleEngine;
 
-import java.util.EnumMap;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -17,27 +15,15 @@ import java.util.Objects;
  */
 public final class PositionEvaluator {
 
-    private static final Map<PieceType, Integer> PIECE_VALUES = new EnumMap<>(PieceType.class);
-
     /*
-     * Hidden pieces never include kings. The unknown value is the rounded average
-     * of the initial hidden pool: (2R + 2N + 2C + 5P + 2G + 2B) / 15 = 227.
+     * Hidden pieces never include kings. The unknown value follows design §8.2:
+     * (2R + 2N + 2C + 5P + 2G + 2B) / 15 = 204 using EvalWeights.
      * This keeps GreedyAgent from reading hidden true identities.
      */
-    public static final int UNKNOWN_HIDDEN_VALUE = 227;
-
-    static {
-        PIECE_VALUES.put(PieceType.KING, 10_000);
-        PIECE_VALUES.put(PieceType.ROOK, 500);
-        PIECE_VALUES.put(PieceType.CANNON, 350);
-        PIECE_VALUES.put(PieceType.KNIGHT, 300);
-        PIECE_VALUES.put(PieceType.GUARD, 150);
-        PIECE_VALUES.put(PieceType.BISHOP, 150);
-        PIECE_VALUES.put(PieceType.PAWN, 100);
-    }
+    public static final int UNKNOWN_HIDDEN_VALUE = BeliefState.initial().expectedValue(Color.RED);
 
     public int pieceValue(PieceType type) {
-        return PIECE_VALUES.get(Objects.requireNonNull(type, "type"));
+        return EvalWeights.pieceValue(Objects.requireNonNull(type, "type"));
     }
 
     public int captureValue(PlayerView view, Move move) {
