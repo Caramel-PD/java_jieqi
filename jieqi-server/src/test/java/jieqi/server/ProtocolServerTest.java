@@ -694,6 +694,86 @@ class ProtocolServerTest {
     }
 
     @Test
+    void requestDrawDoesNotChangeCurrentTurn() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject room = game.red.lastOfType("serverStatus").getAsJsonArray("rooms").get(0).getAsJsonObject();
+        assertEquals("red", room.get("currentTurn").getAsString());
+        assertTrue(game.red.messagesOfType("moveResult").isEmpty());
+        assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
+    void rejectedDrawKeepsGamePlayableForCurrentPlayer() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":false}");
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+
+        JsonObject moveResult = game.red.lastOfType("moveResult");
+        assertTrue(moveResult.get("valid").getAsBoolean());
+        assertTrue(game.red.messagesOfType("gameOver").isEmpty());
+        assertTrue(game.black.messagesOfType("gameOver").isEmpty());
+    }
+
+    @Test
+    void acceptedDrawSendsDrawAgreedGameOverToBothPlayers() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":true}");
+
+        JsonObject redGameOver = game.red.lastOfType("gameOver");
+        JsonObject blackGameOver = game.black.lastOfType("gameOver");
+        assertEquals("draw", redGameOver.get("winner").getAsString());
+        assertEquals("draw_agreed", redGameOver.get("reason").getAsString());
+        assertFalse(redGameOver.has("winnerId"));
+        assertEquals("draw", blackGameOver.get("winner").getAsString());
+        assertEquals("draw_agreed", blackGameOver.get("reason").getAsString());
+        assertFalse(blackGameOver.has("winnerId"));
+    }
+
+    @Test
+    void drawAgreedGameOverIsIdempotentAfterMoveResignAndDisconnect() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":true}");
+        int redGameOverCount = game.red.messagesOfType("gameOver").size();
+        int blackGameOverCount = game.black.messagesOfType("gameOver").size();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+
+        assertEquals(redGameOverCount, game.red.messagesOfType("gameOver").size());
+        assertEquals(blackGameOverCount, game.black.messagesOfType("gameOver").size());
+        assertEquals("draw_agreed", game.black.lastOfType("gameOver").get("reason").getAsString());
+        assertTrue(game.red.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
+    void drawMessagesOutsidePlayingRoomDoNotCrash() {
+        ProtocolServer server = newServer();
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        assertDoesNotThrow(() -> server.onMessage(channel, "{\"messageType\":\"requestDraw\"}"));
+        assertDoesNotThrow(() -> server.onMessage(channel, "{\"messageType\":\"drawResponse\",\"accept\":true}"));
+
+        assertTrue(channel.outbox.isEmpty());
+    }
+
+    @Test
     void resignSendsGameOverToBothPlayers() {
         StartedGame game = startGame();
         game.clear();
