@@ -72,7 +72,9 @@ public final class AiMain {
 
     static String usage() {
         return """
-                Usage: java jieqi.ai.AiMain [options]
+                Usage: java -jar jieqi-ai/target/jieqi-ai.jar [options]
+
+                Options:
                   --serverUrl ws://localhost:8887
                   --userId ai
                   --password ai
@@ -80,6 +82,14 @@ public final class AiMain {
                   --agent random|greedy
                   --thinkTimeMillis 10000
                   --register
+
+                Defaults:
+                  serverUrl = ws://localhost:8887
+                  agent = greedy
+
+                Run two AI players against the same local server:
+                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --register
+                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --register
                 """;
     }
 
