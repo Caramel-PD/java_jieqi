@@ -116,6 +116,37 @@ final class Messages {
         return o.toString();
     }
 
+    /**
+     * 构造提和通知消息。
+     *
+     * <p>requestDraw 是 C→S 请求；客户端弹窗需要明确的 S→C 通知，所以单独输出 drawOffer。
+     * 该消息只通知对手，不携带棋局状态变更，避免客户端误以为回合或棋盘已经变化。</p>
+     *
+     * @param requesterId 提和玩家 userId。
+     * @return 可直接发送给对手的 JSON 文本。
+     */
+    static String drawOffer(String requesterId) {
+        JsonObject o = base("drawOffer");
+        o.addProperty("requesterId", requesterId);
+        return o.toString();
+    }
+
+    /**
+     * 构造拒绝提和的结果通知。
+     *
+     * <p>接受提和已经由 gameOver 表达；拒绝不会终局，因此只通知提和方本次协商结束。</p>
+     *
+     * @param accepted 是否接受；当前拒绝路径传 false，保留字段便于客户端统一处理。
+     * @param responderId 响应玩家 userId。
+     * @return 可直接发送给提和方的 JSON 文本。
+     */
+    static String drawResponseResult(boolean accepted, String responderId) {
+        JsonObject o = base("drawResponseResult");
+        o.addProperty("accepted", accepted);
+        o.addProperty("responderId", responderId);
+        return o.toString();
+    }
+
     static String pong(long timestamp) {
         JsonObject o = base("pong");
         o.addProperty("timestamp", timestamp);

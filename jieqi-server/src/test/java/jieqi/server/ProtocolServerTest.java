@@ -694,6 +694,80 @@ class ProtocolServerTest {
     }
 
     @Test
+    void requestDrawSendsDrawOfferToOpponent() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+
+        assertTrue(game.red.messagesOfType("drawOffer").isEmpty());
+        JsonObject offer = game.black.lastOfType("drawOffer");
+        assertEquals("u1", offer.get("requesterId").getAsString());
+    }
+
+    @Test
+    void rejectedDrawNotifiesRequester() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":false}");
+
+        JsonObject result = game.red.lastOfType("drawResponseResult");
+        assertFalse(result.get("accepted").getAsBoolean());
+        assertEquals("u2", result.get("responderId").getAsString());
+        assertTrue(game.black.messagesOfType("drawResponseResult").isEmpty());
+    }
+
+    @Test
+    void acceptedDrawStillUsesGameOverDrawAgreed() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":true}");
+
+        JsonObject gameOver = game.red.lastOfType("gameOver");
+        assertEquals("draw", gameOver.get("winner").getAsString());
+        assertEquals("draw_agreed", gameOver.get("reason").getAsString());
+        assertFalse(gameOver.has("winnerId"));
+        assertTrue(game.red.messagesOfType("drawResponseResult").isEmpty());
+    }
+
+    @Test
+    void drawOfferDoesNotChangeCurrentTurn() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject room = game.red.lastOfType("serverStatus").getAsJsonArray("rooms").get(0).getAsJsonObject();
+        assertEquals("red", room.get("currentTurn").getAsString());
+        assertTrue(game.red.messagesOfType("moveResult").isEmpty());
+        assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
+    void drawResponseResultDoesNotResetTimerOrMoveState() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"requestDraw\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":false}");
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+        JsonObject room = game.red.lastOfType("serverStatus").getAsJsonArray("rooms").get(0).getAsJsonObject();
+        assertEquals("red", room.get("currentTurn").getAsString());
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+
+        JsonObject moveResult = game.red.lastOfType("moveResult");
+        assertTrue(moveResult.get("valid").getAsBoolean());
+        assertTrue(game.red.messagesOfType("gameOver").isEmpty());
+        assertTrue(game.black.messagesOfType("gameOver").isEmpty());
+    }
+
+    @Test
     void requestDrawDoesNotChangeCurrentTurn() {
         StartedGame game = startGame();
         game.clear();

@@ -935,6 +935,8 @@ final class ProtocolServer {
             }
             // 后一次提和覆盖前一次提和，避免双方连续提和时保留过期请求造成错误接受。
             pendingDrawRequester = session;
+            // 提和通知只发给对手，用于客户端弹窗；这里不能广播，避免提和方重复收到“待处理”提示。
+            sendIfOpen(opponentOf(session), Messages.drawOffer(session.userId));
             System.out.println("requestDraw: roomId=" + id + ", requesterId=" + session.userId
                     + ", opponentId=" + opponentOf(session).userId);
         }
@@ -968,6 +970,7 @@ final class ProtocolServer {
                 return;
             }
             // 拒绝提和只清空待响应状态，继续保留原有行棋方和计时器。
+            sendIfOpen(requester, Messages.drawResponseResult(false, session.userId));
             System.out.println("draw rejected: roomId=" + id + ", requesterId=" + requester.userId
                     + ", responderId=" + session.userId);
         }
