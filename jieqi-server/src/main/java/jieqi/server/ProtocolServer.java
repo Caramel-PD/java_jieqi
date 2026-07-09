@@ -110,6 +110,7 @@ final class ProtocolServer {
                 case "login" -> handleLogin(session, json);
                 case "register" -> handleRegister(session, json);
                 case "startmatch" -> handleStartMatch(session);
+                case "cancelmatch" -> handleCancelMatch(session);
                 case "requestfirsthand" -> handleRequestFirstHand(session, json);
                 case "ready" -> handleReady(session);
                 case "move" -> handleMove(session, json);
@@ -198,6 +199,27 @@ final class ProtocolServer {
             }
         }
         return null;
+    }
+
+    /**
+     * 处理 cancelMatch 消息。
+     *
+     * @param session 发起取消匹配的会话；已登录且仍在 MATCHING 时会从等待队列移除并回到 AUTHED。
+     */
+    private void handleCancelMatch(Core.Session session) {
+        if (!requireLogin(session)) {
+            return;
+        }
+        synchronized (this) {
+            if (session.state != Core.SessionState.MATCHING) {
+                // cancelMatch 可能由联调客户端重复发送，非匹配态保持幂等忽略，避免误伤已创建房间。
+                System.out.println("ignore cancelMatch outside matching: " + session.userId);
+                return;
+            }
+            boolean removed = waiting.remove(session);
+            session.state = Core.SessionState.AUTHED;
+            System.out.println("cancel match: userId=" + session.userId + ", removedFromQueue=" + removed);
+        }
     }
 
     private void handleReady(Core.Session session) {

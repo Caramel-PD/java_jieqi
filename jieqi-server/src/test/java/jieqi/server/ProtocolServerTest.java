@@ -149,6 +149,84 @@ class ProtocolServerTest {
     }
 
     @Test
+    void cancelMatchRemovesWaitingUser() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        server.onConnected(c1);
+        server.onMessage(c1, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        c1.clear();
+
+        server.onMessage(c1, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(c1, "{\"messageType\":\"cancelMatch\"}");
+        server.onMessage(c1, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = c1.lastOfType("serverStatus");
+        assertEquals(1, status.get("onlineUsers").getAsInt());
+        assertEquals(0, status.get("waitingUsers").getAsInt());
+        assertEquals(0, status.getAsJsonArray("rooms").size());
+    }
+
+    @Test
+    void userCanStartMatchAgainAfterCancelMatch() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        FakeChannel c2 = new FakeChannel("c2");
+        server.onConnected(c1);
+        server.onConnected(c2);
+        server.onMessage(c1, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        server.onMessage(c2, "{\"messageType\":\"Login\",\"userId\":\"u2\",\"password\":\"p2\"}");
+        c1.clear();
+        c2.clear();
+
+        server.onMessage(c1, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(c1, "{\"messageType\":\"cancelMatch\"}");
+        server.onMessage(c1, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(c2, "{\"messageType\":\"startMatch\"}");
+
+        assertEquals("matchSuccess", c1.lastOfType("matchSuccess").get("messageType").getAsString());
+        assertEquals("matchSuccess", c2.lastOfType("matchSuccess").get("messageType").getAsString());
+    }
+
+    @Test
+    void cancelMatchOutsideMatchingDoesNotAffectRoom() {
+        ProtocolServer server = newServer();
+        FakeChannel red = new FakeChannel("red");
+        FakeChannel black = new FakeChannel("black");
+        server.onConnected(red);
+        server.onConnected(black);
+        server.onMessage(red, "{\"messageType\":\"Login\",\"userId\":\"u1\",\"password\":\"p1\"}");
+        server.onMessage(black, "{\"messageType\":\"Login\",\"userId\":\"u2\",\"password\":\"p2\"}");
+        red.clear();
+        black.clear();
+
+        server.onMessage(red, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(black, "{\"messageType\":\"startMatch\"}");
+        red.clear();
+        server.onMessage(red, "{\"messageType\":\"cancelMatch\"}");
+        server.onMessage(red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = red.lastOfType("serverStatus");
+        assertEquals(2, status.get("onlineUsers").getAsInt());
+        assertEquals(0, status.get("waitingUsers").getAsInt());
+        JsonArray rooms = status.getAsJsonArray("rooms");
+        assertEquals(1, rooms.size());
+        assertEquals("room_1", rooms.get(0).getAsJsonObject().get("roomId").getAsString());
+    }
+
+    @Test
+    void cancelMatchBeforeLoginReturnsAuthErrorAndDoesNotCrash() {
+        ProtocolServer server = newServer();
+        FakeChannel c1 = new FakeChannel("c1");
+        server.onConnected(c1);
+
+        assertDoesNotThrow(() -> server.onMessage(c1, "{\"messageType\":\"cancelMatch\"}"));
+
+        JsonObject error = c1.lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_AUTH, error.get("code").getAsInt());
+        assertEquals("login required", error.get("message").getAsString());
+    }
+
+    @Test
     void serverStatusListsRoomAfterMatch() {
         ProtocolServer server = newServer();
         FakeChannel red = new FakeChannel("red");
