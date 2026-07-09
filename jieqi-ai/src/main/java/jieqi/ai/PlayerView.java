@@ -54,6 +54,10 @@ public final class PlayerView {
         return RuleEngine.generateLegalMoves(informationBoard, sideToMove);
     }
 
+    BoardSnapshot informationBoard() {
+        return informationBoard;
+    }
+
     public boolean isOccupied(Coord coord) {
         return !informationBoard.cellAt(Objects.requireNonNull(coord, "coord")).isEmpty();
     }

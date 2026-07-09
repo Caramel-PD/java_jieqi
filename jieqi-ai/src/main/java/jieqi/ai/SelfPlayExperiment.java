@@ -15,7 +15,7 @@ public record SelfPlayExperiment(List<SelfPlayResult> results, long seed, int ma
     public static final String CSV_HEADER =
             "redAgent,blackAgent,games,redWins,blackWins,draws,averagePlies,seed,maxPlies";
 
-    private static final String[] AGENTS = {"random", "greedy"};
+    private static final String[] AGENTS = {"random", "greedy", "tactical"};
 
     public SelfPlayExperiment {
         results = List.copyOf(Objects.requireNonNull(results, "results"));
@@ -25,7 +25,7 @@ public record SelfPlayExperiment(List<SelfPlayResult> results, long seed, int ma
     }
 
     public static SelfPlayExperiment matrix(int games, long seed, int maxPlies) {
-        SelfPlayResult[] rows = new SelfPlayResult[4];
+        SelfPlayResult[] rows = new SelfPlayResult[AGENTS.length * AGENTS.length];
         int index = 0;
         for (String red : AGENTS) {
             for (String black : AGENTS) {

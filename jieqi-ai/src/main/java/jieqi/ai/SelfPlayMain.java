@@ -90,6 +90,7 @@ public final class SelfPlayMain {
         return switch (normalizeAgent(agentType)) {
             case "random" -> new RandomAgent(seed);
             case "greedy" -> new GreedyAgent();
+            case "tactical" -> new TacticalAgent();
             default -> throw new IllegalArgumentException("unsupported agent: " + agentType);
         };
     }
@@ -100,8 +101,8 @@ public final class SelfPlayMain {
 
                 Options:
                   --games 20
-                  --red random|greedy
-                  --black random|greedy
+                  --red random|greedy|tactical
+                  --black random|greedy|tactical
                   --seed 1
                   --maxPlies 200
                   --matrix
@@ -125,7 +126,7 @@ public final class SelfPlayMain {
     }
 
     private static void validateAgent(String agentType) {
-        if (!"random".equals(agentType) && !"greedy".equals(agentType)) {
+        if (!"random".equals(agentType) && !"greedy".equals(agentType) && !"tactical".equals(agentType)) {
             throw new IllegalArgumentException("unsupported agent: " + agentType);
         }
     }
