@@ -1,3 +1,8 @@
+/*
+ * 文件功能：记录单局揭棋对局过程，并在终局时写出机器可读 JSON 棋谱。
+ * 所属模块：jieqi-server。
+ * 使用场景：服务端完成 gameStart 后创建记录器，moveResult 后追加走子，gameOver 时落盘供复盘、联调和实验报告使用。
+ */
 package jieqi.server;
 
 import com.google.gson.Gson;
@@ -14,20 +19,55 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/**
+ * 单局游戏的 JSON 棋谱记录器。
+ *
+ * <p>记录器属于旁路组件：它只观察服务器已经裁定出的 moveResult 和 gameOver，
+ * 不参与规则校验，也不改变房间状态。这样即使记录失败，也不会破坏服务端作为裁判的主流程。</p>
+ *
+ * <p>使用示例：</p>
+ * <pre>{@code
+ * GameRecorder recorder = GameRecorder.start("room_1", "u1", "u2");
+ * recorder.recordMove(Color.RED, from, to, true, true, PieceType.CANNON, null);
+ * recorder.finish("red", "u1", "checkmate");
+ * recorder.writeTo(Path.of("records"));
+ * }</pre>
+ */
 final class GameRecorder {
+    /** 棋谱用于机器读取和人工排错，保留 null 字段可以稳定 JSON schema。 */
     private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
 
+    /** 房间编号作为棋谱主键，也作为默认文件名的一部分。 */
     private final String roomId;
+    /** 红方玩家 ID，记录开局后的最终红黑分配结果。 */
     private final String redPlayerId;
+    /** 黑方玩家 ID，记录开局后的最终红黑分配结果。 */
     private final String blackPlayerId;
+    /** 开局时间戳，使用服务器本地时间保证不信任客户端时钟。 */
     private final long startTime;
+    /** 逐步保存走子 JSON，避免额外 DTO 影响当前服务端最小实现。 */
     private final JsonArray moves = new JsonArray();
+    /** 终局时间戳；0 表示尚未终局。 */
     private long endTime;
+    /** 胜方颜色或 draw；与 gameOver.winner 保持一致。 */
     private String winner;
+    /** 胜方玩家 ID；和棋时按协议扩展口径保持为 null。 */
     private String winnerId;
+    /** 终局原因，例如 resign、timeout、noCapture 或 repetition。 */
     private String reason;
+    /** 防止 finishGame 幂等调用时重复覆盖同一个棋谱文件。 */
     private boolean written;
 
+    /**
+     * 创建记录器实例。
+     *
+     * @param roomId 房间编号。
+     * @param redPlayerId 红方玩家 ID。
+     * @param blackPlayerId 黑方玩家 ID。
+     * @param startTime 服务器记录的开局时间戳。
+     * @throws RuntimeException 当前构造器不主动抛出异常。
+     * @apiNote 使用示例：请优先使用 {@link #start(String, String, String)} 创建实例。
+     */
     private GameRecorder(String roomId, String redPlayerId, String blackPlayerId, long startTime) {
         this.roomId = roomId;
         this.redPlayerId = redPlayerId;
@@ -35,10 +75,33 @@ final class GameRecorder {
         this.startTime = startTime;
     }
 
+    /**
+     * 在 gameStart 阶段创建棋谱记录器。
+     *
+     * @param roomId 房间编号。
+     * @param redPlayerId 红方玩家 ID。
+     * @param blackPlayerId 黑方玩家 ID。
+     * @return 已记录 startTime 的新记录器。
+     * @throws RuntimeException 当前实现不主动抛出异常。
+     * @apiNote 使用示例：{@code GameRecorder.start(room.id, red.userId, black.userId);}
+     */
     static GameRecorder start(String roomId, String redPlayerId, String blackPlayerId) {
         return new GameRecorder(roomId, redPlayerId, blackPlayerId, System.currentTimeMillis());
     }
 
+    /**
+     * 追加一步走子记录。
+     *
+     * @param mover 行棋方颜色；无法识别玩家时允许为 null，便于记录非法来源。
+     * @param from 起点坐标。
+     * @param to 终点坐标。
+     * @param isFlip 服务端最终认定的本步是否翻子。
+     * @param valid 本步是否为合法走子；非法走子也记录，便于联调排错。
+     * @param flipResult 翻出的真实棋子类型；未翻子或非法时为 null。
+     * @param capturedPiece 被吃棋子类型；无吃子或对接收方不可见时为 null 或 {@code NULL}。
+     * @throws RuntimeException 当坐标对象为空导致访问失败时抛出，调用方应传入已解析坐标。
+     * @apiNote 使用示例：{@code recorder.recordMove(Color.RED, from, to, true, true, PieceType.ROOK, null);}
+     */
     synchronized void recordMove(Color mover, Coord from, Coord to, boolean isFlip, boolean valid,
                                  PieceType flipResult, String capturedPiece) {
         JsonObject move = new JsonObject();
@@ -50,14 +113,26 @@ final class GameRecorder {
         move.addProperty("toY", to.rank());
         move.addProperty("isFlip", isFlip);
         move.addProperty("valid", valid);
+        // 明确写入 null 而不是省略字段，复盘器和报告脚本可以按固定字段读取。
         addNullable(move, "flipResult", flipResult == null ? null : flipResult.json());
         addNullable(move, "capturedPiece", capturedPiece);
+        // 每步使用服务器时间戳，避免客户端伪造时间影响对局审计。
         move.addProperty("timestamp", System.currentTimeMillis());
         moves.add(move);
     }
 
+    /**
+     * 记录终局信息。
+     *
+     * @param winner 胜方颜色文本，和棋时为 {@code draw}。
+     * @param winnerId 胜方玩家 ID；和棋时为 null。
+     * @param reason 终局原因。
+     * @throws RuntimeException 当前实现不主动抛出异常。
+     * @apiNote 使用示例：{@code recorder.finish("black", "u2", "timeout");}
+     */
     synchronized void finish(String winner, String winnerId, String reason) {
         if (endTime == 0) {
+            // finishGame 可能被超时、断线、认输等路径重复触发；只保留首次终局事实。
             endTime = System.currentTimeMillis();
             this.winner = winner;
             this.winnerId = winnerId;
@@ -65,15 +140,30 @@ final class GameRecorder {
         }
     }
 
+    /**
+     * 将棋谱写入指定目录。
+     *
+     * @param recordsDir 棋谱目录；为 null 时跳过写文件，便于测试或禁用落盘。
+     * @throws IOException 当创建目录或写文件失败时抛出，由房间终局逻辑记录错误并继续主流程。
+     * @apiNote 使用示例：{@code recorder.writeTo(Path.of("records"));}
+     */
     synchronized void writeTo(Path recordsDir) throws IOException {
         if (written || recordsDir == null) {
             return;
         }
         Files.createDirectories(recordsDir);
+        // JSON 文件统一使用 UTF-8，符合协议文档对 JSON payload 的编码要求。
         Files.writeString(recordsDir.resolve(roomId + ".json"), GSON.toJson(toJson()), StandardCharsets.UTF_8);
         written = true;
     }
 
+    /**
+     * 构造最终棋谱 JSON 对象。
+     *
+     * @return 包含房间、玩家、终局和 moves 数组的 JSON。
+     * @throws RuntimeException 当前实现不主动抛出异常。
+     * @apiNote 使用示例：仅由 {@link #writeTo(Path)} 在落盘前调用。
+     */
     private JsonObject toJson() {
         JsonObject root = new JsonObject();
         root.addProperty("roomId", roomId);
@@ -84,12 +174,23 @@ final class GameRecorder {
         addNullable(root, "winner", winner);
         addNullable(root, "winnerId", winnerId);
         addNullable(root, "reason", reason);
+        // deepCopy 避免调用方拿到 root 后间接修改内部 moves，保持记录器封装边界。
         root.add("moves", moves.deepCopy());
         return root;
     }
 
+    /**
+     * 向 JSON 对象添加可空字符串字段。
+     *
+     * @param object 目标 JSON 对象。
+     * @param key 字段名。
+     * @param value 字段值；为 null 时写入 JSON null。
+     * @throws RuntimeException 当 object 为空时由 Gson 抛出空指针异常。
+     * @apiNote 使用示例：{@code addNullable(root, "winnerId", null);}
+     */
     private static void addNullable(JsonObject object, String key, String value) {
         if (value == null) {
+            // 使用显式 JsonNull，保证 serializeNulls 下输出稳定字段而不是缺字段。
             object.add(key, JsonNull.INSTANCE);
         } else {
             object.addProperty(key, value);
