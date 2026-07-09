@@ -34,6 +34,7 @@ class SelfPlayMainTest {
     void createsSupportedAgents() {
         assertInstanceOf(RandomAgent.class, SelfPlayMain.createAgent("random", 1L));
         assertInstanceOf(GreedyAgent.class, SelfPlayMain.createAgent("greedy", 1L));
+        assertInstanceOf(TacticalAgent.class, SelfPlayMain.createAgent("tactical", 1L));
     }
 
     @Test
@@ -43,7 +44,7 @@ class SelfPlayMainTest {
 
     @Test
     void supportsAllRequiredMatchups() {
-        String[] agents = {"random", "greedy"};
+        String[] agents = {"random", "greedy", "tactical"};
         for (String red : agents) {
             for (String black : agents) {
                 SelfPlayResult result = SelfPlayMain.run(new SelfPlayMain.CliOptions(1, red, black, 5L, 1));

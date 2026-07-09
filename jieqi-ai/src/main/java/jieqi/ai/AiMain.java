@@ -66,6 +66,7 @@ public final class AiMain {
         return switch (normalize(agentType)) {
             case "random" -> new RandomAgent();
             case "greedy" -> new GreedyAgent();
+            case "tactical" -> new TacticalAgent();
             default -> throw new IllegalArgumentException("unsupported agent: " + agentType);
         };
     }
@@ -79,7 +80,7 @@ public final class AiMain {
                   --userId ai
                   --password ai
                   --nickname AI
-                  --agent random|greedy
+                  --agent random|greedy|tactical
                   --thinkTimeMillis 10000
                   --register
 

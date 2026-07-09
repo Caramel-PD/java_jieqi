@@ -53,6 +53,7 @@ class AiMainTest {
     void selectsConfiguredAgent() {
         assertInstanceOf(RandomAgent.class, AiMain.createAgent("random"));
         assertInstanceOf(GreedyAgent.class, AiMain.createAgent("greedy"));
+        assertInstanceOf(TacticalAgent.class, AiMain.createAgent("tactical"));
     }
 
     @Test
@@ -74,6 +75,7 @@ class AiMainTest {
 
         String help = out.toString(StandardCharsets.UTF_8);
         assertTrue(help.contains("java -jar jieqi-ai/target/jieqi-ai.jar"));
+        assertTrue(help.contains("--agent random|greedy|tactical"));
         assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --register"));
         assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --register"));
         assertTrue(help.contains("agent = greedy"));

@@ -18,14 +18,14 @@ class SelfPlayExperimentTest {
     private Path tempDir;
 
     @Test
-    void matrixModeGeneratesFourRows() {
+    void matrixModeGeneratesNineRows() {
         SelfPlayExperiment experiment = SelfPlayExperiment.matrix(1, 1L, 1);
 
-        assertEquals(4, experiment.results().size());
+        assertEquals(9, experiment.results().size());
         assertEquals("random", experiment.results().get(0).redAgent());
         assertEquals("random", experiment.results().get(0).blackAgent());
-        assertEquals("greedy", experiment.results().get(3).redAgent());
-        assertEquals("greedy", experiment.results().get(3).blackAgent());
+        assertEquals("tactical", experiment.results().get(8).redAgent());
+        assertEquals("tactical", experiment.results().get(8).blackAgent());
     }
 
     @Test
@@ -66,7 +66,7 @@ class SelfPlayExperimentTest {
         String csv = Files.readString(csvPath, StandardCharsets.UTF_8);
         assertTrue(out.toString(StandardCharsets.UTF_8).contains(csvPath.toString()));
         assertTrue(csv.startsWith(SelfPlayExperiment.CSV_HEADER + "\n"));
-        assertEquals(5, csv.lines().count());
+        assertEquals(10, csv.lines().count());
     }
 
     @Test
@@ -100,6 +100,8 @@ class SelfPlayExperimentTest {
 
         assertTrue(help.contains("--matrix"));
         assertTrue(help.contains("--csv target/self-play.csv"));
+        assertTrue(help.contains("--red random|greedy|tactical"));
+        assertTrue(help.contains("--black random|greedy|tactical"));
         assertTrue(help.contains("SelfPlayMain --matrix --games 20"));
     }
 }
