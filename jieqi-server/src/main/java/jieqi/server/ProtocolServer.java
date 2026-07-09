@@ -6,7 +6,10 @@ import jieqi.common.Color;
 import jieqi.common.Coord;
 import jieqi.common.Json;
 import jieqi.common.PieceType;
+import jieqi.rules.BoardSnapshot;
 import jieqi.rules.Legality;
+import jieqi.rules.RepetitionTracker;
+import jieqi.rules.RepetitionVerdict;
 import jieqi.rules.RuleEngine;
 
 import java.security.SecureRandom;
@@ -177,7 +180,9 @@ final class ProtocolServer {
                 return;
             }
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
-                    config.initialBoardMode, config.turnTimeoutMs, config.recordsDir, scheduler);
+                    config.initialBoardMode, config.turnTimeoutMs, config.recordsDir,
+                    config.repetitionLimit, config.repetitionMinRepeats, config.noCaptureLimitHalfMoves,
+                    scheduler);
             rooms.put(room.id, room);
             opponent.room = room;
             session.room = room;
@@ -313,6 +318,17 @@ final class ProtocolServer {
         }
     }
 
+    static RepetitionOutcome repetitionOutcome(RepetitionVerdict verdict, Color mover) {
+        return switch (verdict) {
+            case NONE -> null;
+            case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition");
+            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition");
+            case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "noCapture");
+        };
+    }
+
+    record RepetitionOutcome(boolean draw, Color winnerColor, String reason) {}
+
     private static final class GameRoom {
         final String id;
         private Core.Session red;
@@ -320,6 +336,7 @@ final class ProtocolServer {
         final String initialBoardMode;
         final long turnTimeoutMs;
         final Path recordsDir;
+        final RepetitionTracker repetitionTracker;
         final ScheduledExecutorService scheduler;
         final Core.ServerBoard board = new Core.ServerBoard();
         final Random rng = new SecureRandom();
@@ -337,13 +354,17 @@ final class ProtocolServer {
         private GameRecorder recorder;
 
         GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode,
-                 long turnTimeoutMs, Path recordsDir, ScheduledExecutorService scheduler) {
+                 long turnTimeoutMs, Path recordsDir,
+                 int repetitionLimit, int repetitionMinRepeats, int noCaptureLimitHalfMoves,
+                 ScheduledExecutorService scheduler) {
             this.id = id;
             this.red = red;
             this.black = black;
             this.initialBoardMode = initialBoardMode;
             this.turnTimeoutMs = turnTimeoutMs;
             this.recordsDir = recordsDir;
+            this.repetitionTracker = new RepetitionTracker(
+                    repetitionLimit, repetitionMinRepeats, noCaptureLimitHalfMoves);
             this.scheduler = scheduler;
         }
 
@@ -404,7 +425,12 @@ final class ProtocolServer {
                 return;
             }
 
+            BoardSnapshot before = board.snapshot();
             Core.ApplyResult result = board.apply(mover, move.from, move.to, rng);
+            BoardSnapshot after = board.snapshot();
+            boolean capture = result.capturedType() != null;
+            RepetitionVerdict verdict = repetitionTracker.onMoveApplied(
+                    before, after, mover, move.from, move.to, capture);
             String moverCapture = capturedPieceFor(result, true);
             String opponentCapture = capturedPieceFor(result, false);
             session.send(Messages.moveResult(true, move.from, move.to, result.isFlip(),
@@ -415,6 +441,9 @@ final class ProtocolServer {
             logMoveResult(session, move, true, result.isFlip(), result.flipType(), moverCapture);
             if (result.kingCaptured()) {
                 finishGame("checkmate", session, opponentOf(session), false);
+                return;
+            }
+            if (finishByRepetitionVerdict(verdict, session)) {
                 return;
             }
             switchTurnAfterLegalMove();
@@ -553,6 +582,40 @@ final class ProtocolServer {
             }
             System.out.println("game over in " + id + ": reason=" + finishReason
                     + ", winner=" + winnerId + ", loser=" + loserId);
+        }
+
+        private boolean finishByRepetitionVerdict(RepetitionVerdict verdict, Core.Session mover) {
+            RepetitionOutcome outcome = repetitionOutcome(verdict, colorOf(mover));
+            if (outcome == null) {
+                return false;
+            }
+            if (outcome.draw()) {
+                finishDraw(outcome.reason());
+            } else {
+                finishGame(outcome.reason(), opponentOf(mover), mover, false);
+            }
+            return true;
+        }
+
+        private void finishDraw(String reason) {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            cancelTurnTimer();
+            winnerId = null;
+            loserId = null;
+            finishReason = reason;
+            if (recorder != null) {
+                recorder.finish("draw", null, reason);
+                try {
+                    recorder.writeTo(recordsDir);
+                } catch (Exception ex) {
+                    System.err.println("write game record failed: roomId=" + id + ", error=" + ex.getMessage());
+                }
+            }
+            broadcastOpen(Messages.gameOver("draw", reason, null));
+            System.out.println("game over in " + id + ": reason=" + finishReason + ", winner=draw");
         }
 
         private void rejectMove(Core.Session session, MoveMessage move, int code, String message) {
