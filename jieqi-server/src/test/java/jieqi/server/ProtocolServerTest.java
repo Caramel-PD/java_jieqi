@@ -240,6 +240,82 @@ class ProtocolServerTest {
     }
 
     @Test
+    void blackRequestFirstHandAndRedDoesNotMakesBlackBecomeRed() {
+        StartedGame game = startGame(false, true);
+
+        JsonObject defaultRedStart = game.red.lastOfType("gameStart");
+        JsonObject defaultBlackStart = game.black.lastOfType("gameStart");
+
+        assertEquals("u2", defaultRedStart.get("redPlayerId").getAsString());
+        assertEquals("u1", defaultRedStart.get("blackPlayerId").getAsString());
+        assertEquals("black", defaultRedStart.get("yourColor").getAsString());
+        assertFalse(defaultRedStart.get("firstHand").getAsBoolean());
+        assertEquals("red", defaultBlackStart.get("yourColor").getAsString());
+        assertTrue(defaultBlackStart.get("firstHand").getAsBoolean());
+    }
+
+    @Test
+    void bothRequestFirstHandKeepsDefaultRed() {
+        StartedGame game = startGame(true, true);
+
+        JsonObject redStart = game.red.lastOfType("gameStart");
+        JsonObject blackStart = game.black.lastOfType("gameStart");
+
+        assertEquals("u1", redStart.get("redPlayerId").getAsString());
+        assertEquals("u2", redStart.get("blackPlayerId").getAsString());
+        assertEquals("red", redStart.get("yourColor").getAsString());
+        assertTrue(redStart.get("firstHand").getAsBoolean());
+        assertEquals("black", blackStart.get("yourColor").getAsString());
+        assertFalse(blackStart.get("firstHand").getAsBoolean());
+    }
+
+    @Test
+    void bothDeclineFirstHandKeepsDefaultRed() {
+        StartedGame game = startGame(false, false);
+
+        JsonObject redStart = game.red.lastOfType("gameStart");
+        JsonObject blackStart = game.black.lastOfType("gameStart");
+
+        assertEquals("u1", redStart.get("redPlayerId").getAsString());
+        assertEquals("u2", redStart.get("blackPlayerId").getAsString());
+        assertEquals("red", redStart.get("yourColor").getAsString());
+        assertTrue(redStart.get("firstHand").getAsBoolean());
+        assertEquals("black", blackStart.get("yourColor").getAsString());
+        assertFalse(blackStart.get("firstHand").getAsBoolean());
+    }
+
+    @Test
+    void requestFirstHandAfterGameStartIsIgnored() {
+        StartedGame game = startGame();
+        JsonObject originalRedStart = game.red.lastOfType("gameStart");
+        JsonObject originalBlackStart = game.black.lastOfType("gameStart");
+        game.clear();
+
+        game.server.onMessage(game.black, requestFirstHand(true));
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+
+        JsonObject status = game.red.lastOfType("serverStatus");
+        JsonObject room = status.getAsJsonArray("rooms").get(0).getAsJsonObject();
+        assertEquals(originalRedStart.get("redPlayerId").getAsString(), room.get("redPlayerId").getAsString());
+        assertEquals(originalRedStart.get("blackPlayerId").getAsString(), room.get("blackPlayerId").getAsString());
+        assertEquals("red", originalRedStart.get("yourColor").getAsString());
+        assertEquals("black", originalBlackStart.get("yourColor").getAsString());
+    }
+
+    @Test
+    void resignWinnerColorAndWinnerIdRemainCorrectAfterFirstHandSwap() {
+        StartedGame game = startGame(false, true);
+        game.clear();
+
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        JsonObject gameOver = game.red.lastOfType("gameOver");
+        assertEquals("u1", gameOver.get("winnerId").getAsString());
+        assertEquals("black", gameOver.get("winner").getAsString());
+        assertEquals("resign", gameOver.get("reason").getAsString());
+    }
+
+    @Test
     void illegalMoveReturnsInvalidAndDoesNotSwitchTurn() {
         StartedGame game = startGame();
         game.clear();
@@ -563,11 +639,20 @@ class ProtocolServerTest {
         return startGame(65_000);
     }
 
+    private static StartedGame startGame(Boolean redWannaFirst, Boolean blackWannaFirst) {
+        return startGame(65_000, null, redWannaFirst, blackWannaFirst);
+    }
+
     private static StartedGame startGame(long turnTimeoutMs) {
         return startGame(turnTimeoutMs, null);
     }
 
     private static StartedGame startGame(long turnTimeoutMs, Path recordsDir) {
+        return startGame(turnTimeoutMs, recordsDir, null, null);
+    }
+
+    private static StartedGame startGame(long turnTimeoutMs, Path recordsDir,
+                                         Boolean redWannaFirst, Boolean blackWannaFirst) {
         ProtocolServer server = newServer(turnTimeoutMs, recordsDir);
         FakeChannel red = new FakeChannel("red");
         FakeChannel black = new FakeChannel("black");
@@ -581,6 +666,12 @@ class ProtocolServerTest {
         server.onMessage(black, "{\"messageType\":\"startMatch\"}");
         red.clear();
         black.clear();
+        if (redWannaFirst != null) {
+            server.onMessage(red, requestFirstHand(redWannaFirst));
+        }
+        if (blackWannaFirst != null) {
+            server.onMessage(black, requestFirstHand(blackWannaFirst));
+        }
         server.onMessage(red, "{\"messageType\":\"Ready\"}");
         server.onMessage(black, "{\"messageType\":\"Ready\"}");
         return new StartedGame(server, red, black);
@@ -611,6 +702,10 @@ class ProtocolServerTest {
     private static String move(String fromX, int fromY, String toX, int toY, boolean isFlip) {
         return "{\"messageType\":\"move\",\"fromX\":\"" + fromX + "\",\"fromY\":" + fromY
                 + ",\"toX\":\"" + toX + "\",\"toY\":" + toY + ",\"isFlip\":" + isFlip + "}";
+    }
+
+    private static String requestFirstHand(boolean wannaFirst) {
+        return "{\"messageType\":\"requestFirstHand\",\"wannaFirst\":" + wannaFirst + "}";
     }
 
     private record StartedGame(ProtocolServer server, FakeChannel red, FakeChannel black) {
