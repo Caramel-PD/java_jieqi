@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -524,7 +525,7 @@ class ProtocolServerTest {
 
     private static final class FakeChannel implements Core.ClientChannel {
         private final String remote;
-        private final List<String> outbox = new ArrayList<>();
+        private final List<String> outbox = new CopyOnWriteArrayList<>();
         private boolean open = true;
 
         FakeChannel(String remote) {
