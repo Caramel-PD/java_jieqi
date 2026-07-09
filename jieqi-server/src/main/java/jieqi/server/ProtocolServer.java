@@ -315,8 +315,8 @@ final class ProtocolServer {
 
     private static final class GameRoom {
         final String id;
-        final Core.Session red;
-        final Core.Session black;
+        private Core.Session red;
+        private Core.Session black;
         final String initialBoardMode;
         final long turnTimeoutMs;
         final Path recordsDir;
@@ -369,6 +369,11 @@ final class ProtocolServer {
 
         synchronized void requestFirstHand(Core.Session session, boolean wannaFirst) {
             if (finished) {
+                return;
+            }
+            if (started) {
+                System.out.println("ignore requestFirstHand after gameStart: roomId=" + id
+                        + ", userId=" + session.userId);
                 return;
             }
             if (session == red) {
@@ -451,6 +456,7 @@ final class ProtocolServer {
         }
 
         private void start() {
+            resolveFirstHand();
             started = true;
             turn = Color.RED;
             recorder = GameRecorder.start(id, red.userId, black.userId);
@@ -461,6 +467,21 @@ final class ProtocolServer {
             black.send(Messages.gameStart(red.userId, black.userId, Color.BLACK,
                     board.snapshot(), initialBoardMode));
             startTurnTimer();
+        }
+
+        private void resolveFirstHand() {
+            boolean redWantsFirst = Boolean.TRUE.equals(redWannaFirst);
+            boolean blackWantsFirst = Boolean.TRUE.equals(blackWannaFirst);
+            if (!redWantsFirst && blackWantsFirst) {
+                Core.Session oldRed = red;
+                red = black;
+                black = oldRed;
+                Boolean oldRedWannaFirst = redWannaFirst;
+                redWannaFirst = blackWannaFirst;
+                blackWannaFirst = oldRedWannaFirst;
+                System.out.println("first hand resolved with color swap: roomId=" + id
+                        + ", redPlayerId=" + red.userId + ", blackPlayerId=" + black.userId);
+            }
         }
 
         private void switchTurnAfterLegalMove() {
