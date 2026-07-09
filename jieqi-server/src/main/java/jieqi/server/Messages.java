@@ -129,6 +129,28 @@ final class Messages {
         return o.toString();
     }
 
+    static String serverStatus(int onlineUsers, int waitingUsers, Iterable<RoomStatus> rooms) {
+        JsonObject o = base("serverStatus");
+        o.addProperty("onlineUsers", onlineUsers);
+        o.addProperty("waitingUsers", waitingUsers);
+        JsonArray arr = new JsonArray();
+        for (RoomStatus room : rooms) {
+            JsonObject r = new JsonObject();
+            r.addProperty("roomId", room.roomId());
+            r.addProperty("redPlayerId", room.redPlayerId());
+            r.addProperty("blackPlayerId", room.blackPlayerId());
+            r.addProperty("started", room.started());
+            r.addProperty("finished", room.finished());
+            r.addProperty("currentTurn", room.currentTurn());
+            arr.add(r);
+        }
+        o.add("rooms", arr);
+        return o.toString();
+    }
+
+    record RoomStatus(String roomId, String redPlayerId, String blackPlayerId,
+                      boolean started, boolean finished, String currentTurn) {}
+
     private static JsonObject base(String type) {
         JsonObject o = new JsonObject();
         o.addProperty("messageType", type);
