@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -768,6 +769,81 @@ class ProtocolServerTest {
     }
 
     @Test
+    void twoMatchesCreateTwoIndependentRooms() {
+        TwoStartedGames games = startTwoGames();
+
+        assertEquals(1, games.room1().red().messagesOfType("gameStart").size());
+        assertEquals(1, games.room1().black().messagesOfType("gameStart").size());
+        assertEquals(1, games.room2().red().messagesOfType("gameStart").size());
+        assertEquals(1, games.room2().black().messagesOfType("gameStart").size());
+        assertEquals("u1", games.room1().red().lastOfType("gameStart").get("redPlayerId").getAsString());
+        assertEquals("u2", games.room1().black().lastOfType("gameStart").get("blackPlayerId").getAsString());
+        assertEquals("u3", games.room2().red().lastOfType("gameStart").get("redPlayerId").getAsString());
+        assertEquals("u4", games.room2().black().lastOfType("gameStart").get("blackPlayerId").getAsString());
+    }
+
+    @Test
+    void moveResultIsOnlyBroadcastInsideSameRoom() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), move("b", 2, "e", 2, true));
+
+        assertEquals(1, games.room1().red().messagesOfType("moveResult").size());
+        assertEquals(1, games.room1().black().messagesOfType("moveResult").size());
+        assertTrue(games.room2().red().messagesOfType("moveResult").isEmpty());
+        assertTrue(games.room2().black().messagesOfType("moveResult").isEmpty());
+        assertTrue(games.room1().red().lastOfType("moveResult").get("valid").getAsBoolean());
+    }
+
+    @Test
+    void gameOverInOneRoomDoesNotFinishOtherRoom() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), "{\"messageType\":\"Resign\"}");
+
+        JsonObject room1GameOver = games.room1().black().lastOfType("gameOver");
+        assertEquals("u2", room1GameOver.get("winnerId").getAsString());
+        assertEquals("resign", room1GameOver.get("reason").getAsString());
+        assertTrue(games.room2().red().messagesOfType("gameOver").isEmpty());
+        assertTrue(games.room2().black().messagesOfType("gameOver").isEmpty());
+
+        games.server().onMessage(games.room2().red(), move("b", 2, "e", 2, true));
+
+        assertTrue(games.room2().red().lastOfType("moveResult").get("valid").getAsBoolean());
+        assertTrue(games.room2().black().lastOfType("moveResult").get("valid").getAsBoolean());
+    }
+
+    @Test
+    void drawOfferDoesNotLeakToAnotherRoom() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), "{\"messageType\":\"requestDraw\"}");
+
+        assertTrue(games.room1().red().messagesOfType("drawOffer").isEmpty());
+        JsonObject offer = games.room1().black().lastOfType("drawOffer");
+        assertEquals("u1", offer.get("requesterId").getAsString());
+        assertTrue(games.room2().red().messagesOfType("drawOffer").isEmpty());
+        assertTrue(games.room2().black().messagesOfType("drawOffer").isEmpty());
+    }
+
+    @Test
+    void serverStatusListsTwoRooms() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), "{\"messageType\":\"serverStatus\"}");
+
+        JsonArray rooms = games.room1().red().lastOfType("serverStatus").getAsJsonArray("rooms");
+        Map<String, JsonObject> byRoomId = roomsById(rooms);
+        assertEquals(2, byRoomId.size());
+        assertRoomStatus(byRoomId.get("room_1"), "room_1", "u1", "u2", true, false, "red");
+        assertRoomStatus(byRoomId.get("room_2"), "room_2", "u3", "u4", true, false, "red");
+    }
+
+    @Test
     void requestDrawDoesNotChangeCurrentTurn() {
         StartedGame game = startGame();
         game.clear();
@@ -1168,6 +1244,54 @@ class ProtocolServerTest {
         return new StartedGame(server, red, black);
     }
 
+    private static TwoStartedGames startTwoGames() {
+        ProtocolServer server = newServer();
+        // 两个房间必须挂在同一个 ProtocolServer 上，才能覆盖 rooms/waiting/session 共享状态的隔离性。
+        StartedGame room1 = matchedGame(server, "u1", "u2");
+        StartedGame room2 = matchedGame(server, "u3", "u4");
+        applyFirstHandAndReady(room1, null, null);
+        applyFirstHandAndReady(room2, null, null);
+        return new TwoStartedGames(server, room1, room2);
+    }
+
+    private static StartedGame matchedGame(ProtocolServer server, String redUserId, String blackUserId) {
+        FakeChannel red = new FakeChannel(redUserId);
+        FakeChannel black = new FakeChannel(blackUserId);
+        server.onConnected(red);
+        server.onConnected(black);
+        server.onMessage(red, login(redUserId));
+        server.onMessage(black, login(blackUserId));
+        red.clear();
+        black.clear();
+        server.onMessage(red, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(black, "{\"messageType\":\"startMatch\"}");
+        red.clear();
+        black.clear();
+        return new StartedGame(server, red, black);
+    }
+
+    private static Map<String, JsonObject> roomsById(JsonArray rooms) {
+        Map<String, JsonObject> byRoomId = new HashMap<>();
+        for (int i = 0; i < rooms.size(); i++) {
+            JsonObject room = rooms.get(i).getAsJsonObject();
+            // rooms 来自服务端 Map，测试按 roomId 取值，避免依赖集合遍历顺序。
+            byRoomId.put(room.get("roomId").getAsString(), room);
+        }
+        return byRoomId;
+    }
+
+    private static void assertRoomStatus(JsonObject room, String roomId,
+                                         String redPlayerId, String blackPlayerId,
+                                         boolean started, boolean finished, String currentTurn) {
+        assertTrue(room != null, "room should exist: " + roomId);
+        assertEquals(roomId, room.get("roomId").getAsString());
+        assertEquals(redPlayerId, room.get("redPlayerId").getAsString());
+        assertEquals(blackPlayerId, room.get("blackPlayerId").getAsString());
+        assertEquals(started, room.get("started").getAsBoolean());
+        assertEquals(finished, room.get("finished").getAsBoolean());
+        assertEquals(currentTurn, room.get("currentTurn").getAsString());
+    }
+
     private static JsonObject readRecord(Path recordsDir, String roomId) throws Exception {
         Path file = recordsDir.resolve(roomId + ".json");
         assertTrue(Files.exists(file), "record file should exist: " + file);
@@ -1199,10 +1323,21 @@ class ProtocolServerTest {
         return "{\"messageType\":\"requestFirstHand\",\"wannaFirst\":" + wannaFirst + "}";
     }
 
+    private static String login(String userId) {
+        return "{\"messageType\":\"Login\",\"userId\":\"" + userId + "\",\"password\":\"p\"}";
+    }
+
     private record StartedGame(ProtocolServer server, FakeChannel red, FakeChannel black) {
         void clear() {
             red.clear();
             black.clear();
+        }
+    }
+
+    private record TwoStartedGames(ProtocolServer server, StartedGame room1, StartedGame room2) {
+        void clear() {
+            room1.clear();
+            room2.clear();
         }
     }
 
