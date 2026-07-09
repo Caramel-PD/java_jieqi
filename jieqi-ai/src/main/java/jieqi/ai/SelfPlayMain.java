@@ -1,5 +1,7 @@
 package jieqi.ai;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Random;
 
@@ -22,7 +24,12 @@ public final class SelfPlayMain {
             System.out.println(usage());
             return;
         }
-        System.out.print(run(parseArgs(args)).toReport());
+        CliOptions options = parseArgs(args);
+        if (options.matrix()) {
+            runMatrix(options);
+            return;
+        }
+        System.out.print(run(options).toReport());
     }
 
     static SelfPlayResult run(CliOptions options) {
@@ -43,6 +50,8 @@ public final class SelfPlayMain {
         String blackAgent = DEFAULT_BLACK_AGENT;
         long seed = DEFAULT_SEED;
         int maxPlies = DEFAULT_MAX_PLIES;
+        boolean matrix = false;
+        String csvPath = null;
 
         for (int i = 0; i < args.length; i++) {
             String raw = args[i];
@@ -60,6 +69,8 @@ public final class SelfPlayMain {
                 case "black" -> blackAgent = normalizeAgent(argument.requireValue());
                 case "seed" -> seed = Long.parseLong(argument.requireValue());
                 case "maxplies" -> maxPlies = Integer.parseInt(argument.requireValue());
+                case "matrix" -> matrix = argument.optionalBoolean(true);
+                case "csv" -> csvPath = argument.requireValue();
                 default -> throw new IllegalArgumentException("unknown option: --" + argument.name());
             }
         }
@@ -72,7 +83,7 @@ public final class SelfPlayMain {
         if (maxPlies < 0) {
             throw new IllegalArgumentException("maxPlies must be >= 0");
         }
-        return new CliOptions(games, redAgent, blackAgent, seed, maxPlies);
+        return new CliOptions(games, redAgent, blackAgent, seed, maxPlies, matrix, csvPath);
     }
 
     static Agent createAgent(String agentType, long seed) {
@@ -93,9 +104,14 @@ public final class SelfPlayMain {
                   --black random|greedy
                   --seed 1
                   --maxPlies 200
+                  --matrix
+                  --csv target/self-play.csv
 
-                Example:
+                Single matchup example:
                   java -cp jieqi-ai/target/jieqi-ai.jar jieqi.ai.SelfPlayMain --games 20 --red greedy --black random --seed 1 --maxPlies 200
+
+                Matrix CSV example:
+                  java -cp jieqi-ai/target/jieqi-ai.jar jieqi.ai.SelfPlayMain --matrix --games 20 --seed 1 --maxPlies 200 --csv target/self-play.csv
                 """;
     }
 
@@ -118,7 +134,18 @@ public final class SelfPlayMain {
         return value.toLowerCase(Locale.ROOT).replace("-", "").replace("_", "");
     }
 
-    record CliOptions(int games, String redAgent, String blackAgent, long seed, int maxPlies) {
+    record CliOptions(
+            int games,
+            String redAgent,
+            String blackAgent,
+            long seed,
+            int maxPlies,
+            boolean matrix,
+            String csvPath) {
+
+        CliOptions(int games, String redAgent, String blackAgent, long seed, int maxPlies) {
+            this(games, redAgent, blackAgent, seed, maxPlies, false, null);
+        }
     }
 
     private record Argument(String name, String value, boolean consumesNext) {
@@ -142,5 +169,27 @@ public final class SelfPlayMain {
             }
             return value;
         }
+
+        private boolean optionalBoolean(boolean defaultValue) {
+            if (value == null || value.isBlank()) {
+                return defaultValue;
+            }
+            return Boolean.parseBoolean(value);
+        }
+    }
+
+    private static void runMatrix(CliOptions options) {
+        SelfPlayExperiment experiment = SelfPlayExperiment.matrix(options.games(), options.seed(), options.maxPlies());
+        if (options.csvPath() == null) {
+            System.out.print(experiment.toCsv());
+            return;
+        }
+        Path path = Path.of(options.csvPath());
+        try {
+            experiment.writeCsv(path);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to write CSV: " + path, e);
+        }
+        System.out.println("wrote CSV: " + path);
     }
 }

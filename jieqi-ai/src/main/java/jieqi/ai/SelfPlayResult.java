@@ -33,6 +33,10 @@ public record SelfPlayResult(
         return games == 0 ? 0.0 : (double) totalPlies / games;
     }
 
+    public String averagePliesText() {
+        return String.format(Locale.ROOT, "%.2f", averagePlies());
+    }
+
     public String toReport() {
         return """
                 games=%d
@@ -49,7 +53,20 @@ public record SelfPlayResult(
                 redWins,
                 blackWins,
                 draws,
-                String.format(Locale.ROOT, "%.2f", averagePlies()));
+                averagePliesText());
+    }
+
+    public String toCsvRow(long seed, int maxPlies) {
+        return String.join(",",
+                redAgent,
+                blackAgent,
+                Integer.toString(games),
+                Integer.toString(redWins),
+                Integer.toString(blackWins),
+                Integer.toString(draws),
+                averagePliesText(),
+                Long.toString(seed),
+                Integer.toString(maxPlies));
     }
 
     static Builder builder(String redAgent, String blackAgent) {
