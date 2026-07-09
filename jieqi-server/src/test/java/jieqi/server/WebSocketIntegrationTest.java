@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
@@ -22,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * D-03 真实 WebSocket 联调测试。
  * <p>
- * 烟测覆盖：ping/pong → login → match → ready → gameStart → move → resign → gameOver。
+ * 烟测覆盖：ping/pong → Login → match → Ready → gameStart → move → Resign → gameOver。
  * 使用随机可用端口，无需 E 的 GUI 客户端，用 CountDownLatch / BlockingQueue 等待消息。
  */
 class WebSocketIntegrationTest {
@@ -49,11 +50,14 @@ class WebSocketIntegrationTest {
         config.turnTimeoutMs = 65_000;
         config.recordsDir = recordsDir;  // 临时目录，避免写棋谱时报错
 
-        // 2. 启动真实 WebSocketServer（不 sleep，connectWithRetry 内部用 connectBlocking 重试就绪）
+        // 2. 启动真实 WebSocketServer
         server = new ServerMain.JieqiWebSocketServer(config);
         server.start();
 
-        // 3. 创建两个脚本客户端（不依赖 E 的 GUI 客户端）
+        // 3. 等服务器端口真正就绪再创建客户端（Socket 直连探测，最多 3s）
+        waitForServerReady();
+
+        // 4. 创建两个脚本客户端（不依赖 E 的 GUI 客户端）
         clientA = new TestClient("A");
         clientB = new TestClient("B");
     }
@@ -74,7 +78,7 @@ class WebSocketIntegrationTest {
     @Test
     void completePingLoginMatchReadyMoveResignFlow() throws Exception {
         // ============================================================
-        // === 连接（connectBlocking 自动重试等待服务器就绪）===========
+        // === 连接（connectBlocking 重试等待 WebSocket 握手就绪）=====
         // ============================================================
         connectWithRetry(clientA);
         connectWithRetry(clientB);
@@ -82,7 +86,7 @@ class WebSocketIntegrationTest {
         assertTrue(clientB.connected.await(3, TimeUnit.SECONDS), "clientB should connect");
 
         // ============================================================
-        // === 1. ping/pong — 在 login 之前验证连接可通信 ==============
+        // === 1. ping/pong — 在 Login 之前验证连接可通信 ==============
         // ============================================================
         clientA.send("{\"messageType\":\"ping\",\"timestamp\":123456}");
         JsonObject pong = clientA.awaitMessageOfType("pong", 3, TimeUnit.SECONDS);
@@ -93,18 +97,18 @@ class WebSocketIntegrationTest {
         // ============================================================
         // === 2. A Login =============================================
         // ============================================================
-        clientA.send("{\"messageType\":\"login\",\"userId\":\"playerA\",\"password\":\"passA\"}");
+        clientA.send("{\"messageType\":\"Login\",\"userId\":\"playerA\",\"password\":\"passA\"}");
         JsonObject loginResultA = clientA.awaitMessageOfType("loginResult", 3, TimeUnit.SECONDS);
         assertNotNull(loginResultA, "A should receive loginResult");
-        assertTrue(loginResultA.get("success").getAsBoolean(), "A login should succeed");
+        assertTrue(loginResultA.get("success").getAsBoolean(), "A Login should succeed");
 
         // ============================================================
         // === 3. B Login =============================================
         // ============================================================
-        clientB.send("{\"messageType\":\"login\",\"userId\":\"playerB\",\"password\":\"passB\"}");
+        clientB.send("{\"messageType\":\"Login\",\"userId\":\"playerB\",\"password\":\"passB\"}");
         JsonObject loginResultB = clientB.awaitMessageOfType("loginResult", 3, TimeUnit.SECONDS);
         assertNotNull(loginResultB, "B should receive loginResult");
-        assertTrue(loginResultB.get("success").getAsBoolean(), "B login should succeed");
+        assertTrue(loginResultB.get("success").getAsBoolean(), "B Login should succeed");
 
         // ============================================================
         // === 4. A startMatch（先发，确保 A 为红方/先手）=============
@@ -135,12 +139,12 @@ class WebSocketIntegrationTest {
         // ============================================================
         // === 7. A Ready =============================================
         // ============================================================
-        clientA.send("{\"messageType\":\"ready\"}");
+        clientA.send("{\"messageType\":\"Ready\"}");
 
         // ============================================================
         // === 8. B Ready =============================================
         // ============================================================
-        clientB.send("{\"messageType\":\"ready\"}");
+        clientB.send("{\"messageType\":\"Ready\"}");
 
         // ============================================================
         // === 9. 双方收到 gameStart（中间有 roomInfo，按类型匹配跳过）
@@ -213,8 +217,6 @@ class WebSocketIntegrationTest {
 
     /**
      * 从 OS 临时端口范围取随机可用端口，并显式排除 avoidPort。
-     * ServerSocket(0) 由 OS 从临时端口范围分配（Win 默认 49152+），
-     * 不会分配到 8887；此处显式校验作为双保险。
      */
     private static int findRandomPortNot(int avoidPort) throws Exception {
         for (int i = 0; i < 10; i++) {
@@ -229,15 +231,41 @@ class WebSocketIntegrationTest {
     }
 
     /**
-     * connectBlocking 重试等待服务器就绪，替代 server.start() 后的 Thread.sleep。
+     * 用 Socket 直连探测服务器端口是否就绪，最多等 3 秒。
+     * 替代 server.start() 后的盲等，避免 CI 环境因启动慢而失败。
+     */
+    private void waitForServerReady() throws Exception {
+        long deadline = System.currentTimeMillis() + 3_000;
+        while (System.currentTimeMillis() < deadline) {
+            try (Socket s = new Socket("127.0.0.1", port)) {
+                // 端口已监听，服务器就绪
+                return;
+            } catch (Exception e) {
+                Thread.sleep(50);
+            }
+        }
+        fail("server did not start listening on port " + port + " within 3 seconds");
+    }
+
+    /**
+     * connectBlocking 重试等待 WebSocket 握手就绪。
+     * true  → 握手成功
+     * false → WebSocket 升级被拒（永久错误），立刻 fail
+     * 异常 → TCP 连接失败（瞬态），重试
      */
     private void connectWithRetry(TestClient client) throws Exception {
         for (int i = 0; i < 10; i++) {
             try {
-                client.connectBlocking();
-                return;
+                if (client.connectBlocking()) {
+                    return;
+                }
+                // 返回 false = 服务器拒绝了 WebSocket 升级，重试无意义
+                fail("WebSocket handshake rejected by server");
             } catch (Exception e) {
-                if (i == 9) throw e;
+                // TCP 连接失败，可能是服务器还没就绪，重试
+                if (i == 9) {
+                    fail("failed to connect after 10 retries: " + e.getMessage());
+                }
                 Thread.sleep(50);
             }
         }
@@ -262,7 +290,7 @@ class WebSocketIntegrationTest {
         final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
 
         TestClient(String name) throws Exception {
-            super(new URI("ws://localhost:" + port));
+            super(new URI("ws://127.0.0.1:" + port));
         }
 
         @Override
