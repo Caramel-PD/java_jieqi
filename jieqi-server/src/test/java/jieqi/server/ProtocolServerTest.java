@@ -241,6 +241,66 @@ class ProtocolServerTest {
     }
 
     @Test
+    void firstHandWindowZeroStartsImmediatelyAfterBothReady() {
+        StartedGame game = startGame(65_000, null, 0, null, null);
+
+        assertFalse(game.red.messagesOfType("gameStart").isEmpty());
+        assertFalse(game.black.messagesOfType("gameStart").isEmpty());
+    }
+
+    @Test
+    void requestFirstHandInsideWindowAffectsGameStart() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 80);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Ready\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"Ready\"}");
+        assertTrue(game.red.messagesOfType("gameStart").isEmpty());
+        assertTrue(game.black.messagesOfType("gameStart").isEmpty());
+
+        game.server.onMessage(game.black, requestFirstHand(true));
+        waitUntil(() -> !game.red.messagesOfType("gameStart").isEmpty()
+                && !game.black.messagesOfType("gameStart").isEmpty());
+
+        JsonObject defaultRedStart = game.red.lastOfType("gameStart");
+        JsonObject defaultBlackStart = game.black.lastOfType("gameStart");
+        assertEquals("u2", defaultRedStart.get("redPlayerId").getAsString());
+        assertEquals("u1", defaultRedStart.get("blackPlayerId").getAsString());
+        assertEquals("black", defaultRedStart.get("yourColor").getAsString());
+        assertEquals("red", defaultBlackStart.get("yourColor").getAsString());
+    }
+
+    @Test
+    void firstHandWindowEndsAndStartsGameAutomatically() throws Exception {
+        StartedGame game = matchedGame(65_000, null, 60);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Ready\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"Ready\"}");
+
+        waitUntil(() -> !game.red.messagesOfType("gameStart").isEmpty()
+                && !game.black.messagesOfType("gameStart").isEmpty());
+
+        JsonObject redStart = game.red.lastOfType("gameStart");
+        assertEquals("u1", redStart.get("redPlayerId").getAsString());
+        assertEquals("u2", redStart.get("blackPlayerId").getAsString());
+    }
+
+    @Test
+    void moveDuringFirstHandWindowIsRejectedAsGameNotStarted() {
+        StartedGame game = matchedGame(65_000, null, 500);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Ready\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"Ready\"}");
+        game.clear();
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+
+        JsonObject rejected = game.red.lastOfType("moveResult");
+        assertFalse(rejected.get("valid").getAsBoolean());
+        JsonObject error = game.red.lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_ILLEGAL_MOVE, error.get("code").getAsInt());
+        assertTrue(game.black.messagesOfType("moveResult").isEmpty());
+    }
+
+    @Test
     void blackRequestFirstHandAndRedDoesNotMakesBlackBecomeRed() {
         StartedGame game = startGame(false, true);
 
@@ -612,26 +672,32 @@ class ProtocolServerTest {
     }
 
     private static ProtocolServer newServer() {
-        return newServer(65_000, null, true);
+        return newServer(65_000, null, true, 0);
     }
 
     private static ProtocolServer newServer(boolean autoRegisterOnLogin) {
-        return newServer(65_000, null, autoRegisterOnLogin);
+        return newServer(65_000, null, autoRegisterOnLogin, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs) {
-        return newServer(turnTimeoutMs, null, true);
+        return newServer(turnTimeoutMs, null, true, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir) {
-        return newServer(turnTimeoutMs, recordsDir, true);
+        return newServer(turnTimeoutMs, recordsDir, true, 0);
     }
 
     private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir, boolean autoRegisterOnLogin) {
+        return newServer(turnTimeoutMs, recordsDir, autoRegisterOnLogin, 0);
+    }
+
+    private static ProtocolServer newServer(long turnTimeoutMs, Path recordsDir,
+                                            boolean autoRegisterOnLogin, long firstHandWindowMs) {
         Core.ServerConfig config = new Core.ServerConfig();
         config.usersFile = null;
         config.autoRegisterOnLogin = autoRegisterOnLogin;
         config.turnTimeoutMs = turnTimeoutMs;
+        config.firstHandWindowMs = firstHandWindowMs;
         config.recordsDir = recordsDir;
         return new ProtocolServer(config);
     }
@@ -641,7 +707,7 @@ class ProtocolServerTest {
     }
 
     private static StartedGame startGame(Boolean redWannaFirst, Boolean blackWannaFirst) {
-        return startGame(65_000, null, redWannaFirst, blackWannaFirst);
+        return startGame(65_000, null, 0, redWannaFirst, blackWannaFirst);
     }
 
     private static StartedGame startGame(long turnTimeoutMs) {
@@ -649,12 +715,30 @@ class ProtocolServerTest {
     }
 
     private static StartedGame startGame(long turnTimeoutMs, Path recordsDir) {
-        return startGame(turnTimeoutMs, recordsDir, null, null);
+        return startGame(turnTimeoutMs, recordsDir, 0, null, null);
     }
 
     private static StartedGame startGame(long turnTimeoutMs, Path recordsDir,
                                          Boolean redWannaFirst, Boolean blackWannaFirst) {
-        ProtocolServer server = newServer(turnTimeoutMs, recordsDir);
+        return startGame(turnTimeoutMs, recordsDir, 0, redWannaFirst, blackWannaFirst);
+    }
+
+    private static StartedGame startGame(long turnTimeoutMs, Path recordsDir, long firstHandWindowMs,
+                                         Boolean redWannaFirst, Boolean blackWannaFirst) {
+        StartedGame game = matchedGame(turnTimeoutMs, recordsDir, firstHandWindowMs);
+        if (redWannaFirst != null) {
+            game.server.onMessage(game.red, requestFirstHand(redWannaFirst));
+        }
+        if (blackWannaFirst != null) {
+            game.server.onMessage(game.black, requestFirstHand(blackWannaFirst));
+        }
+        game.server.onMessage(game.red, "{\"messageType\":\"Ready\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"Ready\"}");
+        return game;
+    }
+
+    private static StartedGame matchedGame(long turnTimeoutMs, Path recordsDir, long firstHandWindowMs) {
+        ProtocolServer server = newServer(turnTimeoutMs, recordsDir, true, firstHandWindowMs);
         FakeChannel red = new FakeChannel("red");
         FakeChannel black = new FakeChannel("black");
         server.onConnected(red);
@@ -667,14 +751,6 @@ class ProtocolServerTest {
         server.onMessage(black, "{\"messageType\":\"startMatch\"}");
         red.clear();
         black.clear();
-        if (redWannaFirst != null) {
-            server.onMessage(red, requestFirstHand(redWannaFirst));
-        }
-        if (blackWannaFirst != null) {
-            server.onMessage(black, requestFirstHand(blackWannaFirst));
-        }
-        server.onMessage(red, "{\"messageType\":\"Ready\"}");
-        server.onMessage(black, "{\"messageType\":\"Ready\"}");
         return new StartedGame(server, red, black);
     }
 

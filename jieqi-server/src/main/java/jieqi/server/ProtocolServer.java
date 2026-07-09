@@ -177,7 +177,8 @@ final class ProtocolServer {
                 return;
             }
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
-                    config.initialBoardMode, config.turnTimeoutMs, config.recordsDir, scheduler);
+                    config.initialBoardMode, config.turnTimeoutMs, config.firstHandWindowMs,
+                    config.recordsDir, scheduler);
             rooms.put(room.id, room);
             opponent.room = room;
             session.room = room;
@@ -319,6 +320,7 @@ final class ProtocolServer {
         private Core.Session black;
         final String initialBoardMode;
         final long turnTimeoutMs;
+        final long firstHandWindowMs;
         final Path recordsDir;
         final ScheduledExecutorService scheduler;
         final Core.ServerBoard board = new Core.ServerBoard();
@@ -330,6 +332,7 @@ final class ProtocolServer {
         private Color turn = Color.RED;
         private boolean started;
         private boolean finished;
+        private ScheduledFuture<?> firstHandWindowTask;
         private ScheduledFuture<?> turnTimer;
         private String winnerId;
         private String loserId;
@@ -337,16 +340,23 @@ final class ProtocolServer {
         private GameRecorder recorder;
 
         GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode,
-                 long turnTimeoutMs, Path recordsDir, ScheduledExecutorService scheduler) {
+                 long turnTimeoutMs, long firstHandWindowMs,
+                 Path recordsDir, ScheduledExecutorService scheduler) {
             this.id = id;
             this.red = red;
             this.black = black;
             this.initialBoardMode = initialBoardMode;
             this.turnTimeoutMs = turnTimeoutMs;
+            this.firstHandWindowMs = firstHandWindowMs;
             this.recordsDir = recordsDir;
             this.scheduler = scheduler;
         }
 
+        /**
+         * 处理 Ready 消息。
+         *
+         * @param session 发送 Ready 的玩家会话；双方都 Ready 后会进入先手协商窗口或立即开局。
+         */
         synchronized void ready(Core.Session session) {
             if (finished) {
                 return;
@@ -363,10 +373,16 @@ final class ProtocolServer {
             }
             if (redReady && blackReady) {
                 System.out.println("both players ready in " + id);
-                start();
+                scheduleStartAfterFirstHandWindow();
             }
         }
 
+        /**
+         * 记录玩家的先手意愿。
+         *
+         * @param session 发送 requestFirstHand 的玩家会话。
+         * @param wannaFirst true 表示希望先手；窗口结束前会参与红黑判定，开局后保持幂等忽略。
+         */
         synchronized void requestFirstHand(Core.Session session, boolean wannaFirst) {
             if (finished) {
                 return;
@@ -436,6 +452,7 @@ final class ProtocolServer {
                 System.out.println("disconnect before gameStart: roomId=" + id
                         + ", disconnectedPlayerId=" + session.userId);
                 finished = true;
+                cancelFirstHandWindow();
                 cancelTurnTimer();
                 return;
             }
@@ -456,6 +473,7 @@ final class ProtocolServer {
         }
 
         private void start() {
+            cancelFirstHandWindow();
             resolveFirstHand();
             started = true;
             turn = Color.RED;
@@ -467,6 +485,44 @@ final class ProtocolServer {
             black.send(Messages.gameStart(red.userId, black.userId, Color.BLACK,
                     board.snapshot(), initialBoardMode));
             startTurnTimer();
+        }
+
+        /**
+         * 在双方 Ready 后安排开局。
+         *
+         * <p>设计文档要求 Ready 后保留先手协商窗口，因此窗口为正数时延迟 gameStart；
+         * 测试和联调可把窗口设为 0，沿用旧的立即开局行为。</p>
+         */
+        private void scheduleStartAfterFirstHandWindow() {
+            if (started || finished || firstHandWindowTask != null) {
+                return;
+            }
+            if (firstHandWindowMs <= 0) {
+                start();
+                return;
+            }
+            System.out.println("first hand window opened: roomId=" + id
+                    + ", durationMs=" + firstHandWindowMs);
+            firstHandWindowTask = scheduler.schedule(() -> {
+                synchronized (this) {
+                    // 定时任务可能与断线/终局并发，二次检查避免窗口结束后误启动已关闭房间。
+                    if (!finished && !started) {
+                        start();
+                    }
+                }
+            }, firstHandWindowMs, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * 取消尚未触发的先手窗口任务。
+         *
+         * <p>开局、断线或终局路径都可能走到这里；统一置空保证后续幂等判断稳定。</p>
+         */
+        private void cancelFirstHandWindow() {
+            if (firstHandWindowTask != null) {
+                firstHandWindowTask.cancel(false);
+                firstHandWindowTask = null;
+            }
         }
 
         private void resolveFirstHand() {
@@ -521,6 +577,7 @@ final class ProtocolServer {
                 return;
             }
             finished = true;
+            cancelFirstHandWindow();
             cancelTurnTimer();
             winnerId = winner.userId;
             loserId = loser.userId;
