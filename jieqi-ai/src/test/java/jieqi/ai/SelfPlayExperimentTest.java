@@ -18,14 +18,14 @@ class SelfPlayExperimentTest {
     private Path tempDir;
 
     @Test
-    void matrixModeGeneratesNineRows() {
+    void matrixModeGeneratesSixteenRows() {
         SelfPlayExperiment experiment = SelfPlayExperiment.matrix(1, 1L, 1);
 
-        assertEquals(9, experiment.results().size());
+        assertEquals(16, experiment.results().size());
         assertEquals("random", experiment.results().get(0).redAgent());
         assertEquals("random", experiment.results().get(0).blackAgent());
-        assertEquals("tactical", experiment.results().get(8).redAgent());
-        assertEquals("tactical", experiment.results().get(8).blackAgent());
+        assertEquals("expecti", experiment.results().get(15).redAgent());
+        assertEquals("expecti", experiment.results().get(15).blackAgent());
     }
 
     @Test
@@ -38,8 +38,8 @@ class SelfPlayExperimentTest {
 
     @Test
     void sameSeedProducesSameCsv() {
-        String first = SelfPlayExperiment.matrix(2, 9L, 10).toCsv();
-        String second = SelfPlayExperiment.matrix(2, 9L, 10).toCsv();
+        String first = SelfPlayExperiment.matrix(1, 9L, 1).toCsv();
+        String second = SelfPlayExperiment.matrix(1, 9L, 1).toCsv();
 
         assertEquals(first, second);
     }
@@ -66,7 +66,7 @@ class SelfPlayExperimentTest {
         String csv = Files.readString(csvPath, StandardCharsets.UTF_8);
         assertTrue(out.toString(StandardCharsets.UTF_8).contains(csvPath.toString()));
         assertTrue(csv.startsWith(SelfPlayExperiment.CSV_HEADER + "\n"));
-        assertEquals(10, csv.lines().count());
+        assertEquals(17, csv.lines().count());
     }
 
     @Test
@@ -100,8 +100,8 @@ class SelfPlayExperimentTest {
 
         assertTrue(help.contains("--matrix"));
         assertTrue(help.contains("--csv target/self-play.csv"));
-        assertTrue(help.contains("--red random|greedy|tactical"));
-        assertTrue(help.contains("--black random|greedy|tactical"));
+        assertTrue(help.contains("--red random|greedy|tactical|expecti"));
+        assertTrue(help.contains("--black random|greedy|tactical|expecti"));
         assertTrue(help.contains("SelfPlayMain --matrix --games 20"));
     }
 }

@@ -30,6 +30,16 @@ public final class BeliefState {
         return new BeliefState(pools, unknownRemovals);
     }
 
+    public BeliefState copy() {
+        Map<Color, EnumMap<PieceType, Integer>> copiedPools = new EnumMap<>(Color.class);
+        Map<Color, Integer> copiedUnknownRemovals = new EnumMap<>(Color.class);
+        for (Color side : Color.values()) {
+            copiedPools.put(side, new EnumMap<>(pools.get(side)));
+            copiedUnknownRemovals.put(side, unknownRemovals(side));
+        }
+        return new BeliefState(copiedPools, copiedUnknownRemovals);
+    }
+
     public int count(Color side, PieceType type) {
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(type, "type");

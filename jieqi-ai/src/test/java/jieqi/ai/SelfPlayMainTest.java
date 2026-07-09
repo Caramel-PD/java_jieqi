@@ -35,16 +35,17 @@ class SelfPlayMainTest {
         assertInstanceOf(RandomAgent.class, SelfPlayMain.createAgent("random", 1L));
         assertInstanceOf(GreedyAgent.class, SelfPlayMain.createAgent("greedy", 1L));
         assertInstanceOf(TacticalAgent.class, SelfPlayMain.createAgent("tactical", 1L));
+        assertInstanceOf(ExpectiAgent.class, SelfPlayMain.createAgent("expecti", 1L));
     }
 
     @Test
     void rejectsUnsupportedAgent() {
-        assertThrows(IllegalArgumentException.class, () -> SelfPlayMain.createAgent("expecti", 1L));
+        assertThrows(IllegalArgumentException.class, () -> SelfPlayMain.createAgent("minimax", 1L));
     }
 
     @Test
     void supportsAllRequiredMatchups() {
-        String[] agents = {"random", "greedy", "tactical"};
+        String[] agents = {"random", "greedy", "tactical", "expecti"};
         for (String red : agents) {
             for (String black : agents) {
                 SelfPlayResult result = SelfPlayMain.run(new SelfPlayMain.CliOptions(1, red, black, 5L, 1));
