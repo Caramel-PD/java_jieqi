@@ -11,13 +11,23 @@ public record AiClientConfig(
         String userId,
         String password,
         String nickname,
-        long thinkTimeMillis) {
+        long thinkTimeMillis,
+        boolean registerOnConnect) {
 
     public static final URI DEFAULT_SERVER_URL = URI.create("ws://localhost:8887");
     public static final String DEFAULT_USER_ID = "ai";
     public static final String DEFAULT_PASSWORD = "ai";
     public static final String DEFAULT_NICKNAME = "AI";
     public static final long DEFAULT_THINK_TIME_MILLIS = 10_000L;
+
+    public AiClientConfig(
+            URI serverUrl,
+            String userId,
+            String password,
+            String nickname,
+            long thinkTimeMillis) {
+        this(serverUrl, userId, password, nickname, thinkTimeMillis, false);
+    }
 
     public AiClientConfig {
         serverUrl = Objects.requireNonNull(serverUrl, "serverUrl");
@@ -35,7 +45,8 @@ public record AiClientConfig(
                 DEFAULT_USER_ID,
                 DEFAULT_PASSWORD,
                 DEFAULT_NICKNAME,
-                DEFAULT_THINK_TIME_MILLIS);
+                DEFAULT_THINK_TIME_MILLIS,
+                false);
     }
 
     private static String requireNonBlank(String value, String name) {

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -96,6 +97,25 @@ class AiClientTest {
     }
 
     @Test
+    void registerSuccessStartsMatch() {
+        List<String> outbound = new ArrayList<>();
+        AiClientConfig config = new AiClientConfig(
+                AiClientConfig.DEFAULT_SERVER_URL,
+                "ai1",
+                "123456",
+                "AI",
+                10_000L,
+                true);
+        AiClient client = new AiClient(config, new FixedAgent(Optional.empty()), outbound::add);
+
+        client.handleServerMessage("""
+                {"messageType":"registerResult","success":true,"message":"ok","userId":"ai1"}
+                """);
+
+        assertEquals("startMatch", messageType(outbound.get(0)));
+    }
+
+    @Test
     void moveResultUpdatesPlayerView() {
         List<String> outbound = new ArrayList<>();
         AiClient client = new AiClient(
@@ -134,7 +154,7 @@ class AiClientTest {
     }
 
     @Test
-    void gameOverStopsFurtherMoves() {
+    void gameOverStopsFurtherMoves() throws InterruptedException {
         List<String> outbound = new ArrayList<>();
         AiClient client = new AiClient(
                 AiClientConfig.defaults(),
@@ -148,6 +168,7 @@ class AiClientTest {
         Optional<Move> afterStop = client.selectAndSendMove();
 
         assertTrue(client.stopped());
+        assertTrue(client.awaitStopped(1, TimeUnit.MILLISECONDS));
         assertTrue(afterStop.isEmpty());
         assertEquals(1, outbound.size(), "only the firstHand move should have been sent");
     }
