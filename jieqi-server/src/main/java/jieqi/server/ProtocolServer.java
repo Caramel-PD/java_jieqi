@@ -198,6 +198,8 @@ final class ProtocolServer {
                 case "move" -> handleMove(session, json);
                 case "ping" -> handlePing(session, json);
                 case "resign" -> handleResign(session);
+                case "requestdraw" -> handleRequestDraw(session);
+                case "drawresponse" -> handleDrawResponse(session, json);
                 case "serverstatus" -> handleServerStatus(session);
                 // 未知消息按设计文档静默忽略并打日志，避免影响跨组兼容。
                 default -> System.out.println("ignore unknown messageType: " + type);
@@ -429,6 +431,37 @@ final class ProtocolServer {
     }
 
     /**
+     * 处理协议和棋请求。
+     *
+     * @param session 提和玩家会话；必须处于已开局且未终局房间中才会记录待响应状态。
+     * @throws RuntimeException 当前实现不主动抛出异常；房间内部会静默忽略非法状态。
+     * @apiNote 使用示例：客户端发送 {@code {"messageType":"requestDraw"}}。
+     */
+    private void handleRequestDraw(Core.Session session) {
+        if (session.room instanceof GameRoom room) {
+            room.requestDraw(session);
+        } else {
+            System.out.println("ignore requestDraw outside room: " + session.userId);
+        }
+    }
+
+    /**
+     * 处理协议和棋响应。
+     *
+     * @param session 响应玩家会话；必须是对手对有效提和做出的响应。
+     * @param json drawResponse JSON，包含 accept 布尔字段。
+     * @throws RuntimeException 当前实现不主动抛出异常；缺失 accept 按拒绝处理以兼容联调客户端。
+     * @apiNote 使用示例：客户端发送 {@code {"messageType":"drawResponse","accept":true}}。
+     */
+    private void handleDrawResponse(Core.Session session, JsonObject json) {
+        if (session.room instanceof GameRoom room) {
+            room.drawResponse(session, Json.optBool(json, "accept", false));
+        } else {
+            System.out.println("ignore drawResponse outside room: " + session.userId);
+        }
+    }
+
+    /**
      * 处理调试用服务器状态查询。
      *
      * @param session 当前连接会话；允许未登录。
@@ -643,6 +676,8 @@ final class ProtocolServer {
         private Boolean redWannaFirst;
         /** 黑方先手意愿；null 表示未表态。 */
         private Boolean blackWannaFirst;
+        /** 当前待响应的提和玩家；为 null 表示没有有效提和。 */
+        private Core.Session pendingDrawRequester;
         /** 当前行棋方，开局后始终从红方开始。 */
         private Color turn = Color.RED;
         /** 是否已经发送 gameStart。 */
@@ -819,6 +854,64 @@ final class ProtocolServer {
                 return;
             }
             finishGame("resign", winner, session, false);
+        }
+
+        /**
+         * 记录一方提和。
+         *
+         * <p>提和是协议协商消息，不属于走子，因此不能改变棋盘、当前回合或回合计时器。
+         * 这里只保存“谁提和”，后续只有对手的 drawResponse 才能让该提和生效。</p>
+         *
+         * @param session 提和玩家会话。
+         * @throws RuntimeException 当前实现不主动抛出异常。
+         * @apiNote 使用示例：对局中玩家发送 {@code {"messageType":"requestDraw"}}。
+         */
+        synchronized void requestDraw(Core.Session session) {
+            if (finished || !started) {
+                System.out.println("ignore requestDraw outside playing room: roomId=" + id
+                        + ", userId=" + session.userId);
+                return;
+            }
+            if (colorOf(session) == null) {
+                return;
+            }
+            // 后一次提和覆盖前一次提和，避免双方连续提和时保留过期请求造成错误接受。
+            pendingDrawRequester = session;
+            System.out.println("requestDraw: roomId=" + id + ", requesterId=" + session.userId
+                    + ", opponentId=" + opponentOf(session).userId);
+        }
+
+        /**
+         * 处理对手对提和的接受或拒绝。
+         *
+         * @param session 响应玩家会话。
+         * @param accept true 表示接受和棋并进入统一和棋终局；false 表示拒绝并继续对局。
+         * @throws RuntimeException 当发送 gameOver 或写棋谱失败时可能由终局入口处理。
+         * @apiNote 使用示例：对手发送 {@code {"messageType":"drawResponse","accept":true}}。
+         */
+        synchronized void drawResponse(Core.Session session, boolean accept) {
+            if (finished || !started || pendingDrawRequester == null) {
+                System.out.println("ignore drawResponse without pending draw: roomId=" + id
+                        + ", userId=" + session.userId);
+                return;
+            }
+            if (session != opponentOf(pendingDrawRequester)) {
+                // 只有被提和的一方可以响应；提和方自答会破坏协议语义，因此保持静默忽略。
+                System.out.println("ignore drawResponse from non-opponent: roomId=" + id
+                        + ", userId=" + session.userId);
+                return;
+            }
+            Core.Session requester = pendingDrawRequester;
+            pendingDrawRequester = null;
+            if (accept) {
+                System.out.println("draw accepted: roomId=" + id + ", requesterId=" + requester.userId
+                        + ", accepterId=" + session.userId);
+                finishDraw("draw_agreed");
+                return;
+            }
+            // 拒绝提和只清空待响应状态，继续保留原有行棋方和计时器。
+            System.out.println("draw rejected: roomId=" + id + ", requesterId=" + requester.userId
+                    + ", responderId=" + session.userId);
         }
 
         /**
