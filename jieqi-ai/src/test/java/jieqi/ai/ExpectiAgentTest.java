@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,7 +20,7 @@ class ExpectiAgentTest {
     void expectiAgentReturnsLegalMove() {
         PlayerView view = viewOf(BoardText.INITIAL);
 
-        Optional<Move> selected = new ExpectiAgent().selectMove(view, TimeBudget.unlimited());
+        Optional<Move> selected = new ExpectiAgent(1).selectMove(view, TimeBudget.unlimited());
 
         assertTrue(selected.isPresent());
         assertTrue(view.legalMoves().contains(selected.orElseThrow()));
@@ -38,7 +39,9 @@ class ExpectiAgentTest {
 
     @Test
     void unlimitedBudgetCompletesAtLeastDepthThree() {
-        PlayerView view = viewOf(BoardText.INITIAL);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/4K4 r
+                """);
         ExpectiAgent agent = new ExpectiAgent();
 
         agent.selectMove(view, TimeBudget.unlimited());
@@ -97,6 +100,61 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void chanceNodeWeightsUseBeliefCounts() {
+        BeliefState belief = BeliefState.initial();
+
+        assertEquals(15, belief.poolSize(Color.RED));
+        assertEquals(2.0 / 15.0, belief.probability(Color.RED, PieceType.ROOK), 1e-9);
+        assertEquals(5.0 / 15.0, belief.probability(Color.RED, PieceType.PAWN), 1e-9);
+
+        belief.recordKnownReveal(Color.RED, PieceType.PAWN);
+
+        assertEquals(14, belief.poolSize(Color.RED));
+        assertEquals(4.0 / 14.0, belief.probability(Color.RED, PieceType.PAWN), 1e-9);
+        assertFalse(belief.availableTypes(Color.RED).contains(PieceType.KING));
+    }
+
+    @Test
+    void chanceBranchesDoNotMutateSiblingBeliefs() {
+        BeliefState belief = BeliefState.initial();
+        PlayerView view = viewOf(BoardText.INITIAL);
+        ExpectiAgent agent = new ExpectiAgent(1, new PositionEvaluator(), belief);
+
+        agent.selectMove(view, TimeBudget.unlimited());
+
+        assertEquals(15, belief.poolSize(Color.RED));
+        assertEquals(2, belief.count(Color.RED, PieceType.ROOK));
+        assertEquals(5, belief.count(Color.RED, PieceType.PAWN));
+        assertEquals(0, belief.unknownRemovals(Color.RED));
+    }
+
+    @Test
+    void hiddenMoveSearchStillReturnsLegalMove() {
+        PlayerView view = viewOf(BoardText.INITIAL);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        Optional<Move> selected = agent.selectMove(view, TimeBudget.unlimited());
+
+        assertTrue(view.legalMoves().stream().anyMatch(move -> view.isHidden(move.from())));
+        assertTrue(selected.isPresent());
+        assertTrue(view.legalMoves().contains(selected.orElseThrow()));
+        assertTrue(agent.lastStats().searchedNodes() > view.legalMoves().size());
+    }
+
+    @Test
+    void exhaustedPoolDoesNotCrashSearch() {
+        BeliefState belief = BeliefState.initial();
+        exhaustPool(belief, Color.RED);
+        PlayerView view = viewOf(BoardText.INITIAL);
+        ExpectiAgent agent = new ExpectiAgent(1, new PositionEvaluator(), belief);
+
+        Optional<Move> selected = assertDoesNotThrow(() -> agent.selectMove(view, TimeBudget.unlimited()));
+
+        assertTrue(selected.isPresent());
+        assertTrue(view.legalMoves().contains(selected.orElseThrow()));
+    }
+
+    @Test
     void beliefStateCopyDoesNotMutateOriginal() {
         BeliefState original = BeliefState.initial();
         BeliefState copy = original.copy();
@@ -127,5 +185,13 @@ class ExpectiAgentTest {
     private static PlayerView viewOf(String text) {
         BoardText.ParsedPosition position = BoardText.parse(text);
         return PlayerView.of(position.board(), position.sideToMove());
+    }
+
+    private static void exhaustPool(BeliefState belief, Color side) {
+        for (PieceType type : PieceType.values()) {
+            while (belief.count(side, type) > 0) {
+                belief.recordKnownReveal(side, type);
+            }
+        }
     }
 }

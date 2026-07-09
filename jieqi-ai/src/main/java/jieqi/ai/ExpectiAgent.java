@@ -25,6 +25,7 @@ public final class ExpectiAgent implements Agent {
 
     private final int maxDepth;
     private final PositionEvaluator evaluator;
+    private final BeliefState initialBelief;
     private volatile SearchStats lastStats = new SearchStats(0, 0, 0, false);
 
     public ExpectiAgent() {
@@ -36,11 +37,16 @@ public final class ExpectiAgent implements Agent {
     }
 
     public ExpectiAgent(int maxDepth, PositionEvaluator evaluator) {
+        this(maxDepth, evaluator, BeliefState.initial());
+    }
+
+    ExpectiAgent(int maxDepth, PositionEvaluator evaluator, BeliefState initialBelief) {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1");
         }
         this.maxDepth = maxDepth;
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
+        this.initialBelief = Objects.requireNonNull(initialBelief, "initialBelief").copy();
     }
 
     @Override
@@ -99,10 +105,10 @@ public final class ExpectiAgent implements Agent {
         Move bestMove = legalMoves.get(0);
         int bestScore = Integer.MIN_VALUE;
         int alpha = -INF;
+        BeliefState rootBelief = initialBelief.copy();
         for (Move move : legalMoves) {
             context.checkTime();
-            SearchState next = apply(board, side, move, BeliefState.initial().copy());
-            int score = -negamax(next.board(), side.opposite(), depth - 1, -INF, -alpha, next.belief(), context);
+            int score = scoreMove(board, side, move, depth, alpha, INF, rootBelief, context);
             if (score > bestScore) {
                 bestMove = move;
                 bestScore = score;
@@ -141,8 +147,7 @@ public final class ExpectiAgent implements Agent {
             if (capturesKing(board, move)) {
                 return WIN_SCORE + depth;
             }
-            SearchState next = apply(board, side, move, belief.copy());
-            int score = -negamax(next.board(), side.opposite(), depth - 1, -beta, -alpha, next.belief(), context);
+            int score = scoreMove(board, side, move, depth, alpha, beta, belief, context);
             if (score > best) {
                 best = score;
             }
@@ -183,12 +188,67 @@ public final class ExpectiAgent implements Agent {
         return belief.expectedValue(cell.color());
     }
 
-    private SearchState apply(BoardSnapshot board, Color side, Move move, BeliefState belief) {
+    private int scoreMove(
+            BoardSnapshot board,
+            Color side,
+            Move move,
+            int depth,
+            int alpha,
+            int beta,
+            BeliefState belief,
+            SearchContext context) {
+        CellState source = board.cellAt(move.from());
+        if (source instanceof CellState.Hidden) {
+            return scoreHiddenMove(board, side, move, depth, alpha, beta, belief, context);
+        }
+        return scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, null);
+    }
+
+    private int scoreHiddenMove(
+            BoardSnapshot board,
+            Color side,
+            Move move,
+            int depth,
+            int alpha,
+            int beta,
+            BeliefState belief,
+            SearchContext context) {
+        int poolSize = belief.poolSize(side);
+        List<PieceType> availableTypes = belief.availableTypes(side);
+        if (poolSize == 0 || availableTypes.isEmpty()) {
+            return scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, PieceType.PAWN);
+        }
+
+        long weightedScore = 0;
+        for (PieceType flipAs : availableTypes) {
+            int count = belief.count(side, flipAs);
+            int score = scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, flipAs);
+            weightedScore += (long) score * count;
+        }
+        return (int) Math.round((double) weightedScore / poolSize);
+    }
+
+    private int scoreKnownMove(
+            BoardSnapshot board,
+            Color side,
+            Move move,
+            int depth,
+            int alpha,
+            int beta,
+            BeliefState belief,
+            SearchContext context,
+            PieceType flipAs) {
+        SearchState next = apply(board, side, move, belief.copy(), flipAs);
+        return -negamax(next.board(), side.opposite(), depth - 1, -beta, -alpha, next.belief(), context);
+    }
+
+    private SearchState apply(BoardSnapshot board, Color side, Move move, BeliefState belief, PieceType flipAs) {
         CellState source = board.cellAt(move.from());
         CellState target = board.cellAt(move.to());
-        PieceType flipAs = null;
         if (source instanceof CellState.Hidden) {
-            flipAs = proxyRevealType(belief, side);
+            if (flipAs == null) {
+                flipAs = PieceType.PAWN;
+            }
             if (belief.count(side, flipAs) > 0) {
                 belief.recordKnownReveal(side, flipAs);
             }
@@ -197,25 +257,6 @@ public final class ExpectiAgent implements Agent {
             belief.recordUnknownRemoval(hiddenTarget.color());
         }
         return new SearchState(board.apply(move.from(), move.to(), flipAs), belief);
-    }
-
-    private PieceType proxyRevealType(BeliefState belief, Color side) {
-        PieceType bestType = PieceType.PAWN;
-        int bestCount = -1;
-        for (PieceType type : PieceType.values()) {
-            if (type == PieceType.KING) {
-                continue;
-            }
-            int count = belief.count(side, type);
-            if (count > bestCount) {
-                bestType = type;
-                bestCount = count;
-            }
-        }
-        if (bestCount <= 0) {
-            return PieceType.PAWN;
-        }
-        return bestType;
     }
 
     private boolean capturesKing(BoardSnapshot board, Move move) {
