@@ -192,6 +192,7 @@ final class ProtocolServer {
                 case "login" -> handleLogin(session, json);
                 case "register" -> handleRegister(session, json);
                 case "startmatch" -> handleStartMatch(session);
+                case "cancelmatch" -> handleCancelMatch(session);
                 case "requestfirsthand" -> handleRequestFirstHand(session, json);
                 case "ready" -> handleReady(session);
                 case "move" -> handleMove(session, json);
@@ -287,7 +288,8 @@ final class ProtocolServer {
             }
             // 队首玩家默认先成为红方，requestFirstHand 会在 gameStart 前按意愿调整。
             GameRoom room = new GameRoom("room_" + roomSequence.getAndIncrement(), opponent, session,
-                    config.initialBoardMode, config.turnTimeoutMs, config.recordsDir,
+                    config.initialBoardMode, config.turnTimeoutMs, config.firstHandWindowMs,
+                    config.recordsDir,
                     config.repetitionLimit, config.repetitionMinRepeats, config.noCaptureLimitHalfMoves,
                     scheduler);
             rooms.put(room.id, room);
@@ -319,6 +321,30 @@ final class ProtocolServer {
             }
         }
         return null;
+    }
+
+    /**
+     * 处理 cancelMatch 消息。
+     *
+     * @param session 发起取消匹配的会话；已登录且仍在 MATCHING 时会从等待队列移除并回到 AUTHED。
+     * @throws RuntimeException 当前实现不主动抛出异常。
+     * @apiNote 使用示例：玩家 startMatch 进入等待队列后发送 {@code {"messageType":"cancelMatch"}}。
+     */
+    private void handleCancelMatch(Core.Session session) {
+        if (!requireLogin(session)) {
+            return;
+        }
+        synchronized (this) {
+            if (session.state != Core.SessionState.MATCHING) {
+                // cancelMatch 允许联调客户端重复发送；非匹配态保持幂等忽略，避免误伤已创建房间。
+                System.out.println("ignore cancelMatch outside matching: " + session.userId);
+                return;
+            }
+            // 只有仍在等待队列的会话才能取消匹配；状态回退让该用户可立即再次 startMatch。
+            boolean removed = waiting.remove(session);
+            session.state = Core.SessionState.AUTHED;
+            System.out.println("cancel match: userId=" + session.userId + ", removedFromQueue=" + removed);
+        }
     }
 
     /**
@@ -597,6 +623,8 @@ final class ProtocolServer {
         final String initialBoardMode;
         /** 单步超时时间，测试可设置短值以避免真实等待 65 秒。 */
         final long turnTimeoutMs;
+        /** Ready 后先手协商窗口，正数表示延迟开局，0 或负数保持立即开局兼容。 */
+        final long firstHandWindowMs;
         /** 棋谱目录，允许为 null 以禁用测试落盘。 */
         final Path recordsDir;
         /** 重复/无吃子判定器，每局单独持有，避免跨房间状态污染。 */
@@ -621,6 +649,8 @@ final class ProtocolServer {
         private boolean started;
         /** 是否已经进入终局；所有终局入口都先检查该标志保证幂等。 */
         private boolean finished;
+        /** 先手协商窗口任务，开局、断线或终局时需要取消以避免延迟误启动。 */
+        private ScheduledFuture<?> firstHandWindowTask;
         /** 当前回合计时任务，切换回合或终局时必须取消。 */
         private ScheduledFuture<?> turnTimer;
         /** 胜方玩家 ID；和棋时为 null。 */
@@ -640,6 +670,7 @@ final class ProtocolServer {
          * @param black 默认黑方 Session。
          * @param initialBoardMode 初始棋盘输出模式。
          * @param turnTimeoutMs 单步超时时间。
+         * @param firstHandWindowMs Ready 后先手协商窗口，0 或负数表示立即开局。
          * @param recordsDir 棋谱目录。
          * @param repetitionLimit 连续重复阈值。
          * @param repetitionMinRepeats 局面重复最小次数。
@@ -649,7 +680,8 @@ final class ProtocolServer {
          * @apiNote 使用示例：匹配成功时由 {@link ProtocolServer#handleStartMatch(Core.Session)} 创建。
          */
         GameRoom(String id, Core.Session red, Core.Session black, String initialBoardMode,
-                 long turnTimeoutMs, Path recordsDir,
+                 long turnTimeoutMs, long firstHandWindowMs,
+                 Path recordsDir,
                  int repetitionLimit, int repetitionMinRepeats, int noCaptureLimitHalfMoves,
                  ScheduledExecutorService scheduler) {
             this.id = id;
@@ -657,6 +689,7 @@ final class ProtocolServer {
             this.black = black;
             this.initialBoardMode = initialBoardMode;
             this.turnTimeoutMs = turnTimeoutMs;
+            this.firstHandWindowMs = firstHandWindowMs;
             this.recordsDir = recordsDir;
             this.repetitionTracker = new RepetitionTracker(
                     repetitionLimit, repetitionMinRepeats, noCaptureLimitHalfMoves);
@@ -664,11 +697,11 @@ final class ProtocolServer {
         }
 
         /**
-         * 标记玩家已准备，并在双方 Ready 后开局。
+         * 标记玩家已准备，并在双方 Ready 后进入先手协商窗口或立即开局。
          *
-         * @param session 发送 Ready 的玩家会话。
+         * @param session 发送 Ready 的玩家会话；双方都 Ready 后会进入先手协商窗口或立即开局。
          * @throws RuntimeException 当前实现不主动抛出异常。
-         * @apiNote 使用示例：双方发送 Ready 后会触发 {@link #start()}。
+         * @apiNote 使用示例：双方发送 Ready 后会触发 {@link #scheduleStartAfterFirstHandWindow()}。
          */
         synchronized void ready(Core.Session session) {
             if (finished) {
@@ -687,15 +720,15 @@ final class ProtocolServer {
             }
             if (redReady && blackReady) {
                 System.out.println("both players ready in " + id);
-                start();
+                scheduleStartAfterFirstHandWindow();
             }
         }
 
         /**
-         * 记录玩家是否希望先手。
+         * 记录玩家的先手意愿。
          *
-         * @param session 发送 requestFirstHand 的玩家。
-         * @param wannaFirst 是否希望成为红方先手。
+         * @param session 发送 requestFirstHand 的玩家会话。
+         * @param wannaFirst true 表示希望先手；窗口结束前会参与红黑判定，开局后保持幂等忽略。
          * @throws RuntimeException 当前实现不主动抛出异常。
          * @apiNote 使用示例：gameStart 前发送 {@code {"messageType":"requestFirstHand","wannaFirst":true}}。
          */
@@ -803,6 +836,7 @@ final class ProtocolServer {
                 System.out.println("disconnect before gameStart: roomId=" + id
                         + ", disconnectedPlayerId=" + session.userId);
                 finished = true;
+                cancelFirstHandWindow();
                 cancelTurnTimer();
                 return;
             }
@@ -844,6 +878,7 @@ final class ProtocolServer {
          * @apiNote 使用示例：双方 Ready 后由 {@link #ready(Core.Session)} 调用。
          */
         private void start() {
+            cancelFirstHandWindow();
             resolveFirstHand();
             started = true;
             turn = Color.RED;
@@ -856,6 +891,47 @@ final class ProtocolServer {
             black.send(Messages.gameStart(red.userId, black.userId, Color.BLACK,
                     board.snapshot(), initialBoardMode));
             startTurnTimer();
+        }
+
+        /**
+         * 在双方 Ready 后安排开局。
+         *
+         * <p>设计文档要求 Ready 后保留先手协商窗口，因此窗口为正数时延迟 gameStart；
+         * 测试和联调可把窗口设为 0，沿用旧的立即开局行为。</p>
+         *
+         * @throws RuntimeException 当调度器拒绝任务或开局发送失败时可能抛出。
+         * @apiNote 使用示例：双方 Ready 后调用；窗口结束后进入 {@link #start()}。
+         */
+        private void scheduleStartAfterFirstHandWindow() {
+            if (started || finished || firstHandWindowTask != null) {
+                return;
+            }
+            if (firstHandWindowMs <= 0) {
+                start();
+                return;
+            }
+            System.out.println("first hand window opened: roomId=" + id
+                    + ", durationMs=" + firstHandWindowMs);
+            firstHandWindowTask = scheduler.schedule(() -> {
+                synchronized (this) {
+                    // 定时任务可能与断线/终局并发，二次检查避免窗口结束后误启动已关闭房间。
+                    if (!finished && !started) {
+                        start();
+                    }
+                }
+            }, firstHandWindowMs, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * 取消尚未触发的先手窗口任务。
+         *
+         * <p>开局、断线或终局路径都可能走到这里；统一置空保证后续幂等判断稳定。</p>
+         */
+        private void cancelFirstHandWindow() {
+            if (firstHandWindowTask != null) {
+                firstHandWindowTask.cancel(false);
+                firstHandWindowTask = null;
+            }
         }
 
         /**
@@ -955,6 +1031,7 @@ final class ProtocolServer {
             }
             // 先设置 finished，确保后续发送消息、写棋谱或断线回调再次进入时不会重复 gameOver。
             finished = true;
+            cancelFirstHandWindow();
             cancelTurnTimer();
             winnerId = winner.userId;
             loserId = loser.userId;
@@ -1026,6 +1103,7 @@ final class ProtocolServer {
             }
             // 和棋同样走 finished 幂等保护，但 winnerId/loserId 必须保持 null。
             finished = true;
+            cancelFirstHandWindow();
             cancelTurnTimer();
             winnerId = null;
             loserId = null;

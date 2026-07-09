@@ -48,6 +48,8 @@ class WebSocketIntegrationTest {
         config.usersFile = null;
         config.autoRegisterOnLogin = true;
         config.turnTimeoutMs = 65_000;
+        // 该集成烟测验证旧的 Ready 后立即开局链路，显式关闭先手窗口避免测试等待真实 10 秒。
+        config.firstHandWindowMs = 0;
         config.recordsDir = recordsDir;  // 临时目录，避免写棋谱时报错
 
         // 2. 启动真实 WebSocketServer
