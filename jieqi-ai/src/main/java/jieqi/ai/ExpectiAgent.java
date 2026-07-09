@@ -18,12 +18,14 @@ import java.util.Optional;
 public final class ExpectiAgent implements Agent {
 
     public static final int DEFAULT_MAX_DEPTH = 3;
+    private static final int TIME_CHECK_INTERVAL_NODES = 2_048;
 
     private static final int WIN_SCORE = EvalWeights.KING_VALUE * 100;
     private static final int INF = WIN_SCORE * 10;
 
     private final int maxDepth;
     private final PositionEvaluator evaluator;
+    private volatile SearchStats lastStats = new SearchStats(0, 0, 0, false);
 
     public ExpectiAgent() {
         this(DEFAULT_MAX_DEPTH);
@@ -48,31 +50,77 @@ public final class ExpectiAgent implements Agent {
 
         List<Move> legalMoves = view.legalMoves();
         if (legalMoves.isEmpty()) {
+            lastStats = new SearchStats(0, 0, 0, false);
             return Optional.empty();
         }
 
         BoardSnapshot board = view.informationBoard();
         Color side = view.sideToMove();
         Move bestMove = legalMoves.get(0);
-        int bestScore = Integer.MIN_VALUE;
-        int alpha = -INF;
 
         for (Move move : legalMoves) {
             if (capturesKing(board, move)) {
+                lastStats = new SearchStats(0, 0, 0, false);
                 return Optional.of(move);
             }
+        }
+
+        SearchContext context = new SearchContext(budget);
+        if (budget.expired()) {
+            context.timedOut = true;
+            lastStats = context.toStats(0);
+            return Optional.of(bestMove);
+        }
+
+        for (int depth = 1; depth <= maxDepth; depth++) {
+            try {
+                RootResult result = searchRoot(board, side, legalMoves, depth, context);
+                bestMove = result.move();
+                context.completedDepth = depth;
+            } catch (SearchTimeout timeout) {
+                context.timedOut = true;
+                break;
+            }
+        }
+        lastStats = context.toStats(context.completedDepth);
+        return Optional.of(bestMove);
+    }
+
+    public SearchStats lastStats() {
+        return lastStats;
+    }
+
+    private RootResult searchRoot(
+            BoardSnapshot board,
+            Color side,
+            List<Move> legalMoves,
+            int depth,
+            SearchContext context) {
+        Move bestMove = legalMoves.get(0);
+        int bestScore = Integer.MIN_VALUE;
+        int alpha = -INF;
+        for (Move move : legalMoves) {
+            context.checkTime();
             SearchState next = apply(board, side, move, BeliefState.initial().copy());
-            int score = -negamax(next.board(), side.opposite(), maxDepth - 1, -INF, -alpha, next.belief());
+            int score = -negamax(next.board(), side.opposite(), depth - 1, -INF, -alpha, next.belief(), context);
             if (score > bestScore) {
                 bestMove = move;
                 bestScore = score;
             }
             alpha = Math.max(alpha, bestScore);
         }
-        return Optional.of(bestMove);
+        return new RootResult(bestMove, bestScore);
     }
 
-    private int negamax(BoardSnapshot board, Color side, int depth, int alpha, int beta, BeliefState belief) {
+    private int negamax(
+            BoardSnapshot board,
+            Color side,
+            int depth,
+            int alpha,
+            int beta,
+            BeliefState belief,
+            SearchContext context) {
+        context.enterNode();
         if (RuleEngine.isKingCaptured(board, side)) {
             return -WIN_SCORE - depth;
         }
@@ -94,12 +142,13 @@ public final class ExpectiAgent implements Agent {
                 return WIN_SCORE + depth;
             }
             SearchState next = apply(board, side, move, belief.copy());
-            int score = -negamax(next.board(), side.opposite(), depth - 1, -beta, -alpha, next.belief());
+            int score = -negamax(next.board(), side.opposite(), depth - 1, -beta, -alpha, next.belief(), context);
             if (score > best) {
                 best = score;
             }
             alpha = Math.max(alpha, score);
             if (alpha >= beta) {
+                context.betaCutoffs++;
                 break;
             }
         }
@@ -175,5 +224,46 @@ public final class ExpectiAgent implements Agent {
     }
 
     private record SearchState(BoardSnapshot board, BeliefState belief) {
+    }
+
+    private record RootResult(Move move, int score) {
+    }
+
+    private static final class SearchContext {
+        private final TimeBudget budget;
+        private int completedDepth;
+        private long searchedNodes;
+        private long betaCutoffs;
+        private boolean timedOut;
+
+        private SearchContext(TimeBudget budget) {
+            this.budget = budget;
+        }
+
+        private void enterNode() {
+            searchedNodes++;
+            if (searchedNodes % TIME_CHECK_INTERVAL_NODES == 0) {
+                checkTime();
+            }
+        }
+
+        private void checkTime() {
+            if (budget.expired()) {
+                timedOut = true;
+                throw SearchTimeout.INSTANCE;
+            }
+        }
+
+        private SearchStats toStats(int completedDepth) {
+            return new SearchStats(completedDepth, searchedNodes, betaCutoffs, timedOut);
+        }
+    }
+
+    private static final class SearchTimeout extends RuntimeException {
+        private static final SearchTimeout INSTANCE = new SearchTimeout();
+
+        private SearchTimeout() {
+            super(null, null, false, false);
+        }
     }
 }
