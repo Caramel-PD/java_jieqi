@@ -20,7 +20,9 @@ class ExpectiAgentTest {
 
     @Test
     void expectiAgentReturnsLegalMove() {
-        PlayerView view = viewOf(BoardText.INITIAL);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/X3P4/9/9/4K4 r
+                """);
 
         Optional<Move> selected = new ExpectiAgent(1).selectMove(view, TimeBudget.unlimited());
 
@@ -54,7 +56,9 @@ class ExpectiAgentTest {
 
     @Test
     void lastStatsRecordsCompletedDepthAndNodes() {
-        PlayerView view = viewOf(BoardText.INITIAL);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/4K4 r
+                """);
         ExpectiAgent agent = new ExpectiAgent(2);
 
         agent.selectMove(view, TimeBudget.unlimited());
@@ -63,6 +67,7 @@ class ExpectiAgentTest {
         assertEquals(2, stats.completedDepth());
         assertTrue(stats.searchedNodes() > 0);
         assertTrue(stats.betaCutoffs() >= 0);
+        assertTrue(stats.quiescenceNodes() > 0);
         assertFalse(stats.timedOut());
     }
 
@@ -103,12 +108,12 @@ class ExpectiAgentTest {
 
     @Test
     void chanceNodeUsesWeightedExpectedScore() {
+        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
         PlayerView view = viewOf("""
                 4k4/9/9/9/4p4/9/X8/9/9/4K4 r
-                """);
+                """, belief);
         Move hiddenMove = Move.parse("a3a4");
-        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
-        ExpectiAgent agent = new ExpectiAgent(1, new PositionEvaluator(), belief);
+        ExpectiAgent agent = new ExpectiAgent(1);
 
         int rookScore = agent.scoreMoveAsRevealForTesting(view, hiddenMove, 1, belief, PieceType.ROOK);
         int pawnScore = agent.scoreMoveAsRevealForTesting(view, hiddenMove, 1, belief, PieceType.PAWN);
@@ -125,12 +130,12 @@ class ExpectiAgentTest {
 
     @Test
     void chanceNodeDoesNotUseCutoffBoundAsExactScore() {
+        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
         PlayerView view = viewOf("""
                 4k4/9/9/9/4p4/9/X8/9/9/R3K4 r
-                """);
+                """, belief);
         Move hiddenMove = Move.parse("a3a4");
-        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
-        ExpectiAgent agent = new ExpectiAgent(2, new PositionEvaluator(), belief);
+        ExpectiAgent agent = new ExpectiAgent(2);
 
         int exactScore = agent.scoreMoveForTesting(view, hiddenMove, 2, belief, -1_000_000_000, 1_000_000_000);
         int scoreWithParentAlpha = agent.scoreMoveForTesting(view, hiddenMove, 2, belief, 500_000, 1_000_000_000);
@@ -139,10 +144,95 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void expectiSearchUsesPlayerViewBelief() {
+        BeliefState belief = beliefKeeping(Color.RED, PieceType.PAWN);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/4p4/9/X8/9/9/4K4 r
+                """, belief);
+        Move hiddenMove = Move.parse("a3a4");
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        int pawnOnlyScore = agent.scoreMoveAsRevealForTesting(view, hiddenMove, 1, belief, PieceType.PAWN);
+        int chanceScore = agent.scoreMoveForTesting(view, hiddenMove, 1, -1_000_000_000, 1_000_000_000);
+
+        assertEquals(pawnOnlyScore, chanceScore);
+    }
+
+    @Test
+    void quietPositionStopsImmediately() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/P3P4/9/9/4K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.quiescenceScoreForTesting(view);
+
+        assertEquals(1, agent.lastStats().quiescenceNodes());
+    }
+
+    @Test
+    void quiescenceExtendsCaptureSequence() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/4P4/p8/9/R3K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        int staticScore = agent.staticEvaluateForTesting(view);
+        int quiescenceScore = agent.quiescenceScoreForTesting(view);
+
+        assertTrue(agent.lastStats().quiescenceNodes() > 1);
+        assertTrue(quiescenceScore > staticScore);
+    }
+
+    @Test
+    void quiescenceSeesImmediateKingLoss() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/P8/9/4r4/4K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.quiescenceScoreForTesting(view);
+
+        assertTrue(agent.lastStats().quiescenceNodes() > 1);
+    }
+
+    @Test
+    void quiescenceDepthIsBounded() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/r1r1r1r2/9/R1R1R1R2/9/9/4K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.quiescenceScoreForTesting(view);
+
+        assertTrue(agent.lastStats().quiescenceNodes() < 1_000);
+    }
+
+    @Test
+    void hiddenCaptureStillUsesChanceNode() {
+        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/p8/X3P4/9/9/4K4 r
+                """, belief);
+        Move hiddenCapture = Move.parse("a3a4");
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        int rookScore = agent.scoreQuiescenceMoveAsRevealForTesting(view, hiddenCapture, belief, PieceType.ROOK);
+        int pawnScore = agent.scoreQuiescenceMoveAsRevealForTesting(view, hiddenCapture, belief, PieceType.PAWN);
+        int expected = (int) Math.round((rookScore * 2L + pawnScore * 5L) / 7.0);
+
+        int chanceScore = agent.scoreQuiescenceMoveForTesting(view, hiddenCapture, belief);
+
+        assertEquals(expected, chanceScore);
+    }
+
+    @Test
     void chanceBranchesDoNotMutateSiblingBeliefs() {
         BeliefState belief = BeliefState.initial();
-        PlayerView view = viewOf(BoardText.INITIAL);
-        ExpectiAgent agent = new ExpectiAgent(1, new PositionEvaluator(), belief);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/X3P4/9/9/4K4 r
+                """, belief);
+        ExpectiAgent agent = new ExpectiAgent(1);
 
         agent.selectMove(view, TimeBudget.unlimited());
 
@@ -154,7 +244,9 @@ class ExpectiAgentTest {
 
     @Test
     void hiddenMoveSearchStillReturnsLegalMove() {
-        PlayerView view = viewOf(BoardText.INITIAL);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/X3P4/9/9/4K4 r
+                """);
         ExpectiAgent agent = new ExpectiAgent(1);
 
         Optional<Move> selected = agent.selectMove(view, TimeBudget.unlimited());
@@ -169,8 +261,10 @@ class ExpectiAgentTest {
     void exhaustedPoolDoesNotCrashSearch() {
         BeliefState belief = BeliefState.initial();
         exhaustPool(belief, Color.RED);
-        PlayerView view = viewOf(BoardText.INITIAL);
-        ExpectiAgent agent = new ExpectiAgent(1, new PositionEvaluator(), belief);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/X3P4/9/9/4K4 r
+                """, belief);
+        ExpectiAgent agent = new ExpectiAgent(1);
 
         Optional<Move> selected = assertDoesNotThrow(() -> agent.selectMove(view, TimeBudget.unlimited()));
 
@@ -209,6 +303,11 @@ class ExpectiAgentTest {
     private static PlayerView viewOf(String text) {
         BoardText.ParsedPosition position = BoardText.parse(text);
         return PlayerView.of(position.board(), position.sideToMove());
+    }
+
+    private static PlayerView viewOf(String text, BeliefState belief) {
+        BoardText.ParsedPosition position = BoardText.parse(text);
+        return PlayerView.of(position.board(), position.sideToMove(), belief);
     }
 
     private static void exhaustPool(BeliefState belief, Color side) {

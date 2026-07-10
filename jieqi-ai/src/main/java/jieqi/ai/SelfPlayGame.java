@@ -54,17 +54,17 @@ public final class SelfPlayGame {
 
     public PlayedGame play() {
         BoardText.ParsedPosition initial = BoardText.parse(BoardText.INITIAL);
-        BoardSnapshot board = initial.board();
-        Color sideToMove = initial.sideToMove();
+        PlayerView view = PlayerView.of(initial.board(), initial.sideToMove());
         int plies = 0;
 
         while (plies < maxPlies) {
+            BoardSnapshot board = view.informationBoard();
+            Color sideToMove = view.sideToMove();
             List<Move> legalMoves = RuleEngine.generateLegalMoves(board, sideToMove);
             if (legalMoves.isEmpty()) {
                 return new PlayedGame(Winner.DRAW, plies);
             }
 
-            PlayerView view = PlayerView.of(board, sideToMove);
             Move move = selectMove(agentFor(sideToMove), view, legalMoves);
             CellState source = board.cellAt(move.from());
             CellState target = board.cellAt(move.to());
@@ -73,13 +73,18 @@ public final class SelfPlayGame {
                     ? hiddenPools.get(sideToMove).draw()
                     : null;
 
-            board = board.apply(move.from(), move.to(), flipAs);
+            view = view.apply(new MoveResultMessage(
+                    true,
+                    move,
+                    flipAs != null,
+                    Optional.ofNullable(flipAs),
+                    capturedPiece(target)));
             plies++;
 
-            if (capturedKing.isPresent() || RuleEngine.isKingCaptured(board, sideToMove.opposite())) {
+            if (capturedKing.isPresent()
+                    || RuleEngine.isKingCaptured(view.informationBoard(), sideToMove.opposite())) {
                 return new PlayedGame(winnerFor(sideToMove), plies);
             }
-            sideToMove = sideToMove.opposite();
         }
 
         return new PlayedGame(Winner.DRAW, plies);
@@ -106,6 +111,16 @@ public final class SelfPlayGame {
             return Optional.of(revealed.color());
         }
         return Optional.empty();
+    }
+
+    private static MoveResultMessage.CapturedPiece capturedPiece(CellState target) {
+        if (target instanceof CellState.Hidden) {
+            return MoveResultMessage.CapturedPiece.unknown();
+        }
+        if (target instanceof CellState.Revealed revealed) {
+            return MoveResultMessage.CapturedPiece.known(revealed.type());
+        }
+        return MoveResultMessage.CapturedPiece.none();
     }
 
     private static Winner winnerFor(Color side) {
