@@ -1118,6 +1118,149 @@ class ProtocolServerTest {
         assertTrue(legalMove.get("valid").getAsBoolean());
     }
 
+    @Test
+    void gameRecordQueriesRequireLogin(@TempDir Path recordsDir) {
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel channel = new FakeChannel("anonymous");
+        server.onConnected(channel);
+
+        server.onMessage(channel, "{\"messageType\":\"queryGameRecords\"}");
+        assertEquals(ProtocolServer.ERROR_AUTH, channel.lastOfType("error").get("code").getAsInt());
+
+        channel.clear();
+        server.onMessage(channel,
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"room_1\"}");
+        assertEquals(ProtocolServer.ERROR_AUTH, channel.lastOfType("error").get("code").getAsInt());
+    }
+
+    @Test
+    void emptyAndNullRecordDirectoriesReturnEmptyList(@TempDir Path recordsDir) {
+        ProtocolServer emptyServer = newServer(65_000, recordsDir);
+        FakeChannel emptyClient = loginClient(emptyServer, "u1");
+        emptyClient.clear();
+
+        emptyServer.onMessage(emptyClient,
+                "{\"messageType\":\"QuErYgAmErEcOrDs\",\"extra\":true}");
+
+        JsonObject empty = emptyClient.lastOfType("gameRecordList");
+        assertEquals(0, empty.get("total").getAsInt());
+        assertEquals(0, empty.get("offset").getAsInt());
+        assertEquals(20, empty.get("limit").getAsInt());
+        assertEquals(0, empty.getAsJsonArray("records").size());
+
+        ProtocolServer nullServer = newServer();
+        FakeChannel nullClient = loginClient(nullServer, "u2");
+        nullClient.clear();
+        assertDoesNotThrow(() -> nullServer.onMessage(nullClient,
+                "{\"messageType\":\"queryGameRecords\"}"));
+        assertEquals(0, nullClient.lastOfType("gameRecordList").get("total").getAsInt());
+    }
+
+    @Test
+    void recordListSortsPagesCapsLimitAndBuildsSummaries(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 1);
+        writeGameRecord(recordsDir, "room_2", 200, "draw", null, "noCapture", 2);
+        writeGameRecord(recordsDir, "room_3", 200, "black", "u6", "timeout", 3);
+        Files.writeString(recordsDir.resolve("broken.json"), "not json", StandardCharsets.UTF_8);
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel client = loginClient(server, "viewer");
+        client.clear();
+
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecords\",\"offset\":0,\"limit\":2}");
+
+        JsonObject firstPage = client.lastOfType("gameRecordList");
+        assertEquals(3, firstPage.get("total").getAsInt());
+        JsonArray records = firstPage.getAsJsonArray("records");
+        // endTime 相同的记录按 roomId 降序，确保不同文件系统上的结果一致。
+        assertEquals("room_3", records.get(0).getAsJsonObject().get("roomId").getAsString());
+        assertEquals("room_2", records.get(1).getAsJsonObject().get("roomId").getAsString());
+        assertEquals(3, records.get(0).getAsJsonObject().get("moveCount").getAsInt());
+        assertTrue(records.get(1).getAsJsonObject().get("winnerId").isJsonNull());
+
+        client.clear();
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecords\",\"offset\":2,\"limit\":999}");
+        JsonObject secondPage = client.lastOfType("gameRecordList");
+        assertEquals(100, secondPage.get("limit").getAsInt());
+        assertEquals("room_1", secondPage.getAsJsonArray("records")
+                .get(0).getAsJsonObject().get("roomId").getAsString());
+
+        client.clear();
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecords\",\"offset\":99,\"limit\":20}");
+        assertEquals(0, client.lastOfType("gameRecordList").getAsJsonArray("records").size());
+    }
+
+    @Test
+    void recordDetailReturnsOriginalMovesAndMissingRecordError(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 2);
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel client = loginClient(server, "viewer");
+        client.clear();
+
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"room_1\"}");
+
+        JsonObject record = client.lastOfType("gameRecord").getAsJsonObject("record");
+        assertEquals("room_1", record.get("roomId").getAsString());
+        assertEquals(2, record.getAsJsonArray("moves").size());
+        assertEquals(2, record.getAsJsonArray("moves").get(1).getAsJsonObject().get("moveNo").getAsInt());
+
+        client.clear();
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"missing\"}");
+        JsonObject error = client.lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_RECORD_NOT_FOUND, error.get("code").getAsInt());
+        assertEquals("game record not found", error.get("message").getAsString());
+    }
+
+    @Test
+    void recordQueryRejectsInvalidArgumentsAndCannotTraversePaths(@TempDir Path root) throws Exception {
+        Path recordsDir = Files.createDirectory(root.resolve("records"));
+        writeGameRecord(root, "secret", 999, "red", "u1", "resign", 0);
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel client = loginClient(server, "viewer");
+        client.clear();
+
+        server.onMessage(client,
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"../secret\"}");
+        assertEquals(ProtocolServer.ERROR_RECORD_NOT_FOUND,
+                client.lastOfType("error").get("code").getAsInt());
+
+        String[] invalidRequests = {
+                "{\"messageType\":\"queryGameRecords\",\"offset\":-1}",
+                "{\"messageType\":\"queryGameRecords\",\"limit\":0}",
+                "{\"messageType\":\"queryGameRecords\",\"limit\":1.5}",
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"\"}",
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":123}"
+        };
+        for (String request : invalidRequests) {
+            client.clear();
+            server.onMessage(client, request);
+            assertEquals(ProtocolServer.ERROR_BAD_JSON, client.lastOfType("error").get("code").getAsInt());
+        }
+    }
+
+    @Test
+    void recordQueriesDoNotChangeRoomStateOrResetTurnTimer(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "history", 100, "red", "old-red", "resign", 0);
+        StartedGame game = startGame(180, recordsDir);
+        game.clear();
+        JsonObject before = roomStatus(game);
+        Thread.sleep(110);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"queryGameRecords\"}");
+        game.server.onMessage(game.red,
+                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"history\"}");
+
+        JsonObject after = roomStatus(game);
+        assertEquals(before.get("currentTurn").getAsString(), after.get("currentTurn").getAsString());
+        assertEquals(before.get("started").getAsBoolean(), after.get("started").getAsBoolean());
+        waitUntil(() -> !game.red.messagesOfType("gameOver").isEmpty());
+        assertEquals("timeout", game.red.lastOfType("gameOver").get("reason").getAsString());
+    }
+
     private static ProtocolServer newServer() {
         return newServer(65_000, null, true, 0, 80, 0);
     }
@@ -1297,6 +1440,56 @@ class ProtocolServerTest {
         assertTrue(Files.exists(file), "record file should exist: " + file);
         String json = Files.readString(file, StandardCharsets.UTF_8);
         return JsonParser.parseString(json).getAsJsonObject();
+    }
+
+    private static FakeChannel loginClient(ProtocolServer server, String userId) {
+        FakeChannel channel = new FakeChannel(userId);
+        server.onConnected(channel);
+        server.onMessage(channel, login(userId));
+        return channel;
+    }
+
+    private static JsonObject roomStatus(StartedGame game) {
+        game.server.onMessage(game.red, "{\"messageType\":\"serverStatus\"}");
+        JsonArray rooms = game.red.lastOfType("serverStatus").getAsJsonArray("rooms");
+        return roomsById(rooms).get("room_1");
+    }
+
+    private static void writeGameRecord(Path recordsDir, String roomId, long endTime,
+                                        String winner, String winnerId, String reason,
+                                        int moveCount) throws Exception {
+        Files.createDirectories(recordsDir);
+        JsonObject record = new JsonObject();
+        record.addProperty("roomId", roomId);
+        record.addProperty("redPlayerId", roomId + "_red");
+        record.addProperty("blackPlayerId", roomId + "_black");
+        record.addProperty("startTime", endTime - 50);
+        record.addProperty("endTime", endTime);
+        record.addProperty("winner", winner);
+        if (winnerId == null) {
+            record.add("winnerId", null);
+        } else {
+            record.addProperty("winnerId", winnerId);
+        }
+        record.addProperty("reason", reason);
+        JsonArray moves = new JsonArray();
+        for (int moveNo = 1; moveNo <= moveCount; moveNo++) {
+            JsonObject move = new JsonObject();
+            move.addProperty("moveNo", moveNo);
+            move.addProperty("mover", moveNo % 2 == 1 ? "red" : "black");
+            move.addProperty("fromX", "a");
+            move.addProperty("fromY", 0);
+            move.addProperty("toX", "a");
+            move.addProperty("toY", 1);
+            move.addProperty("isFlip", false);
+            move.addProperty("valid", true);
+            move.add("flipResult", null);
+            move.add("capturedPiece", null);
+            move.addProperty("timestamp", endTime - moveCount + moveNo);
+            moves.add(move);
+        }
+        record.add("moves", moves);
+        Files.writeString(recordsDir.resolve(roomId + ".json"), record.toString(), StandardCharsets.UTF_8);
     }
 
     private static void waitUntil(Condition condition) throws Exception {
