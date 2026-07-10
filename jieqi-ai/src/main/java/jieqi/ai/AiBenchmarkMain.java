@@ -61,12 +61,8 @@ public final class AiBenchmarkMain {
     static List<BenchmarkRow> run(CliOptions opts) {
         List<BenchmarkRow> rows = new ArrayList<>();
         for (String opponent : opts.opponents) {
-            SelfPlayResult result = SelfPlayMain.run(new SelfPlayMain.CliOptions(
-                    opts.games,
-                    opts.agent,
-                    opponent,
-                    opts.seed,
-                    opts.maxPlies));
+            SelfPlayResult result = SelfPlayMain.run(
+                    new SelfPlayMain.CliOptions(opts.games, opts.agent, opponent, opts.seed, opts.maxPlies));
             rows.add(BenchmarkRow.from(opts.agent, opponent, result, opts.seed, opts.maxPlies));
         }
         return rows;
@@ -129,6 +125,7 @@ public final class AiBenchmarkMain {
         if (maxPlies < 0) {
             throw new IllegalArgumentException("maxPlies must be >= 0");
         }
+        // normalize all opponents
         String[] normalizedOpponents = new String[opponents.length];
         for (int i = 0; i < opponents.length; i++) {
             normalizedOpponents[i] = normalize(opponents[i].trim());
@@ -242,8 +239,8 @@ public final class AiBenchmarkMain {
                     agent,
                     opponent,
                     result.games(),
-                    result.redWins(),
-                    result.blackWins(),
+                    result.redWins(),     // agent 执红 → redWins = agent wins
+                    result.blackWins(),   // blackWins = agent losses
                     result.draws(),
                     winRate,
                     result.averagePlies(),

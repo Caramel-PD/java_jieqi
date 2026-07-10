@@ -29,6 +29,7 @@ public final class ExpectiAgent implements Agent {
     private static final int INF = WIN_SCORE * 10;
 
     private final int maxDepth;
+    private final int maxQuiescenceDepth;
     private final PositionEvaluator evaluator;
     private final MoveOrderer moveOrderer;
     private volatile SearchStats lastStats = new SearchStats(0, 0, 0, 0, false);
@@ -46,10 +47,26 @@ public final class ExpectiAgent implements Agent {
     }
 
     ExpectiAgent(int maxDepth, PositionEvaluator evaluator, MoveOrderer moveOrderer) {
+        this(maxDepth, MAX_QUIESCENCE_DEPTH, evaluator, moveOrderer);
+    }
+
+    ExpectiAgent(int maxDepth, int maxQuiescenceDepth) {
+        this(maxDepth, maxQuiescenceDepth, new PositionEvaluator(), new MoveOrderer());
+    }
+
+    private ExpectiAgent(
+            int maxDepth,
+            int maxQuiescenceDepth,
+            PositionEvaluator evaluator,
+            MoveOrderer moveOrderer) {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1");
         }
+        if (maxQuiescenceDepth < 0) {
+            throw new IllegalArgumentException("maxQuiescenceDepth must be >= 0");
+        }
         this.maxDepth = maxDepth;
+        this.maxQuiescenceDepth = maxQuiescenceDepth;
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
         this.moveOrderer = Objects.requireNonNull(moveOrderer, "moveOrderer");
     }
@@ -277,7 +294,7 @@ public final class ExpectiAgent implements Agent {
 
         boolean inImmediateKingThreat = hasImmediateKingThreat(board, side);
         int standPat = evaluate(board, side, belief);
-        if (quiescenceDepth >= MAX_QUIESCENCE_DEPTH) {
+        if (quiescenceDepth >= maxQuiescenceDepth) {
             return standPat;
         }
         if (!inImmediateKingThreat) {
