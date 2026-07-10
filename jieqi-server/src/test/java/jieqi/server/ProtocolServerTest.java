@@ -66,6 +66,21 @@ class ProtocolServerTest {
     }
 
     @Test
+    void extraFieldsAreIgnoredForKnownMessages() {
+        ProtocolServer server = newServer();
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        server.onMessage(channel,
+                "{\"messageType\":\"ping\",\"timestamp\":1712345678901,\"clientClock\":\"forged\"}");
+
+        JsonObject pong = channel.lastOfType("pong");
+        assertEquals("pong", pong.get("messageType").getAsString());
+        assertEquals(1712345678901L, pong.get("timestamp").getAsLong());
+        assertFalse(pong.has("clientClock"));
+    }
+
+    @Test
     void badJsonReturnsErrorAndDoesNotCrash() {
         ProtocolServer server = newServer();
         FakeChannel channel = new FakeChannel("c1");
@@ -76,6 +91,21 @@ class ProtocolServerTest {
         JsonObject response = JsonParser.parseString(channel.last()).getAsJsonObject();
         assertEquals("error", response.get("messageType").getAsString());
         assertEquals(ProtocolServer.ERROR_BAD_JSON, response.get("code").getAsInt());
+    }
+
+    @Test
+    void badJsonDoesNotAffectOtherRooms() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), "not json");
+        games.server().onMessage(games.room2().red(), move("b", 2, "e", 2, true));
+
+        JsonObject error = games.room1().red().lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_BAD_JSON, error.get("code").getAsInt());
+        assertTrue(games.room2().red().lastOfType("moveResult").get("valid").getAsBoolean());
+        assertTrue(games.room2().black().lastOfType("moveResult").get("valid").getAsBoolean());
+        assertTrue(games.room1().black().messagesOfType("error").isEmpty());
     }
 
     @Test
@@ -686,11 +716,11 @@ class ProtocolServerTest {
                 ProtocolServer.repetitionOutcome(RepetitionVerdict.REPETITION_DRAW, Color.BLACK);
 
         assertTrue(outcome.draw());
-        assertEquals("repetition", outcome.reason());
+        assertEquals("repetition_draw", outcome.reason());
         JsonObject gameOver = JsonParser.parseString(Messages.gameOver("draw", outcome.reason(), null))
                 .getAsJsonObject();
         assertEquals("draw", gameOver.get("winner").getAsString());
-        assertEquals("repetition", gameOver.get("reason").getAsString());
+        assertEquals("repetition_draw", gameOver.get("reason").getAsString());
         assertFalse(gameOver.has("winnerId"));
     }
 
@@ -902,6 +932,7 @@ class ProtocolServerTest {
 
         game.server.onMessage(game.red, move("b", 2, "e", 2, true));
         game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":true}");
         game.red.closeConnection();
         game.server.onClosed(game.red);
 
@@ -1066,6 +1097,40 @@ class ProtocolServerTest {
         server.onMessage(channel, bigMessage);
 
         assertFalse(channel.isOpen());
+    }
+
+    @Test
+    void oversizedFrameOnlyClosesSenderAndOtherConnectionStillWorks() {
+        ProtocolServer server = newServer();
+        FakeChannel oversized = new FakeChannel("oversized");
+        FakeChannel healthy = new FakeChannel("healthy");
+        server.onConnected(oversized);
+        server.onConnected(healthy);
+
+        String bigMessage = "{\"messageType\":\"ping\",\"timestamp\":1,\"pad\":\""
+                + "x".repeat(1100) + "\"}";
+        server.onMessage(oversized, bigMessage);
+        server.onMessage(healthy, "{\"messageType\":\"ping\",\"timestamp\":2}");
+
+        assertFalse(oversized.isOpen());
+        assertTrue(healthy.isOpen());
+        assertEquals(2, healthy.lastOfType("pong").get("timestamp").getAsLong());
+        assertTrue(oversized.outbox.isEmpty());
+    }
+
+    @Test
+    void forgedTimestampDoesNotAffectServerTurnTimer() throws Exception {
+        StartedGame game = startGame(80);
+        game.clear();
+
+        game.server.onMessage(game.red,
+                "{\"messageType\":\"ping\",\"timestamp\":9999999999999,\"turnTimeoutMs\":999999999}");
+
+        waitUntil(() -> !game.red.messagesOfType("timeout").isEmpty()
+                && !game.black.messagesOfType("timeout").isEmpty());
+        JsonObject timeout = game.red.lastOfType("timeout");
+        assertEquals("u1", timeout.get("loserId").getAsString());
+        assertEquals("u2", timeout.get("winnerId").getAsString());
     }
 
     @Test

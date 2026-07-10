@@ -626,7 +626,7 @@ final class ProtocolServer {
         return switch (verdict) {
             case NONE -> null;
             case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition");
-            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition");
+            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition_draw");
             case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "noCapture");
         };
     }
