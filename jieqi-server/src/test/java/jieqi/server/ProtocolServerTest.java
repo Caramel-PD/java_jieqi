@@ -1007,6 +1007,32 @@ class ProtocolServerTest {
     }
 
     @Test
+    void resignWritesJsonAndJieqiTextRecords(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        assertTrue(Files.exists(recordsDir.resolve("room_1.json")));
+        assertTrue(Files.exists(recordsDir.resolve("room_1.jieqi")));
+    }
+
+    @Test
+    void jieqiTextRecordContainsRequiredHeaders(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("Red: u1"));
+        assertTrue(text.contains("Black: u2"));
+        assertTrue(text.contains("Start: "));
+        assertTrue(text.contains("Result: black(u2)"));
+        assertTrue(text.contains("Reason: resign"));
+    }
+
+    @Test
     void registerSuccess() {
         ProtocolServer server = newServer(false);  // 关闭自动注册，单独测 register
         FakeChannel channel = new FakeChannel("c1");
@@ -1093,6 +1119,20 @@ class ProtocolServerTest {
     }
 
     @Test
+    void legalFlipMoveIsWrittenToJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("1. red b2-e2"));
+        assertTrue(text.contains("isFlip=true"));
+        assertTrue(text.contains("flipResult="));
+    }
+
+    @Test
     void illegalMoveIsRecordedWithoutSwitchingTurn(@TempDir Path recordsDir) throws Exception {
         StartedGame game = startGame(65_000, recordsDir);
         game.clear();
@@ -1116,6 +1156,49 @@ class ProtocolServerTest {
         JsonObject legalMove = moves.get(1).getAsJsonObject();
         assertEquals("red", legalMove.get("mover").getAsString());
         assertTrue(legalMove.get("valid").getAsBoolean());
+    }
+
+    @Test
+    void illegalMoveDoesNotBreakJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "c", 3, true));
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("1. red b2-c3 invalid"));
+        assertTrue(text.contains("2. red b2-e2"));
+        assertTrue(text.contains("Reason: resign"));
+    }
+
+    @Test
+    void repeatedGameOverDoesNotRewriteJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        Path textFile = recordsDir.resolve("room_1.jieqi");
+        String firstText = Files.readString(textFile, StandardCharsets.UTF_8);
+        long firstSize = Files.size(textFile);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+
+        assertEquals(firstText, Files.readString(textFile, StandardCharsets.UTF_8));
+        assertEquals(firstSize, Files.size(textFile));
+    }
+
+    @Test
+    void nullRecordsDirDoesNotBreakGameOver() {
+        StartedGame game = startGame(65_000, null);
+        game.clear();
+
+        assertDoesNotThrow(() -> game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}"));
+        assertEquals("gameOver", game.red.lastOfType("gameOver").get("messageType").getAsString());
+        assertEquals("gameOver", game.black.lastOfType("gameOver").get("messageType").getAsString());
     }
 
     private static ProtocolServer newServer() {
@@ -1297,6 +1380,12 @@ class ProtocolServerTest {
         assertTrue(Files.exists(file), "record file should exist: " + file);
         String json = Files.readString(file, StandardCharsets.UTF_8);
         return JsonParser.parseString(json).getAsJsonObject();
+    }
+
+    private static String readTextRecord(Path recordsDir, String roomId) throws Exception {
+        Path file = recordsDir.resolve(roomId + ".jieqi");
+        assertTrue(Files.exists(file), "text record file should exist: " + file);
+        return Files.readString(file, StandardCharsets.UTF_8);
     }
 
     private static void waitUntil(Condition condition) throws Exception {
