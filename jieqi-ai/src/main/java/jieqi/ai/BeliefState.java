@@ -3,7 +3,9 @@ package jieqi.ai;
 import jieqi.common.Color;
 import jieqi.common.PieceType;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -49,16 +51,32 @@ public final class BeliefState {
     public double probability(Color side, PieceType type) {
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(type, "type");
-        int total = remainingKnownPoolSize(side);
+        int total = poolSize(side);
         if (total == 0) {
             return 0.0;
         }
         return (double) count(side, type) / total;
     }
 
+    public int poolSize(Color side) {
+        Objects.requireNonNull(side, "side");
+        return remainingKnownPoolSize(side);
+    }
+
+    public List<PieceType> availableTypes(Color side) {
+        Objects.requireNonNull(side, "side");
+        List<PieceType> types = new ArrayList<>();
+        for (PieceType type : PieceType.values()) {
+            if (type != PieceType.KING && count(side, type) > 0) {
+                types.add(type);
+            }
+        }
+        return List.copyOf(types);
+    }
+
     public int expectedValue(Color side) {
         Objects.requireNonNull(side, "side");
-        int total = remainingKnownPoolSize(side);
+        int total = poolSize(side);
         if (total == 0) {
             return 0;
         }
