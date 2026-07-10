@@ -69,13 +69,20 @@ public final class Core {
         static ServerConfig fromEnv(Map<String, String> env) {
             ServerConfig c = new ServerConfig();
             String home = env.getOrDefault("JIEQI_HOME", ".");
+            // 环境变量只覆盖启动期配置，不改变测试里手动 new ServerConfig 后逐项赋值的用法。
             c.port = envInt(env, "JIEQI_PORT", c.port);
             c.turnTimeoutMs = envInt(env, "JIEQI_TURN_TIMEOUT_MS", (int) c.turnTimeoutMs);
             c.firstHandWindowMs = envInt(env, "JIEQI_FIRSTHAND_WINDOW_MS", (int) c.firstHandWindowMs);
             c.autoReadyAfterMs = envInt(env, "JIEQI_AUTO_READY_AFTER_MS", (int) c.autoReadyAfterMs);
+            c.repetitionLimit = envInt(env, "JIEQI_REPETITION_LIMIT", c.repetitionLimit);
+            c.repetitionMinRepeats = envInt(env, "JIEQI_REPETITION_MIN_REPEATS", c.repetitionMinRepeats);
+            c.noCaptureLimitHalfMoves = envInt(env, "JIEQI_NO_CAPTURE_LIMIT_HALF_MOVES",
+                    c.noCaptureLimitHalfMoves);
+            c.initialBoardMode = envString(env, "JIEQI_INITIAL_BOARD_MODE", c.initialBoardMode);
             c.autoRegisterOnLogin = !"false".equalsIgnoreCase(env.get("JIEQI_AUTO_REGISTER"));
-            c.recordsDir = Path.of(home, "records");
-            c.usersFile = Path.of(home, "users.json");
+            // 数据文件默认落在 JIEQI_HOME 下；显式路径优先，便于 CI/联调使用临时目录隔离数据。
+            c.recordsDir = envPath(env, "JIEQI_RECORDS_DIR", Path.of(home, "records"));
+            c.usersFile = envPath(env, "JIEQI_USERS_FILE", Path.of(home, "users.json"));
             return c;
         }
 
@@ -91,6 +98,16 @@ public final class Core {
             } catch (NumberFormatException e) {
                 return def;
             }
+        }
+
+        private static String envString(Map<String, String> env, String key, String def) {
+            String v = env.get(key);
+            return v == null || v.isBlank() ? def : v.trim();
+        }
+
+        private static Path envPath(Map<String, String> env, String key, Path def) {
+            String v = env.get(key);
+            return v == null || v.isBlank() ? def : Path.of(v.trim());
         }
     }
 
