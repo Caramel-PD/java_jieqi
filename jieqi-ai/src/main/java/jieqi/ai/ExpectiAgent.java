@@ -5,10 +5,13 @@ import jieqi.common.Coord;
 import jieqi.common.Move;
 import jieqi.common.PieceType;
 import jieqi.rules.BoardSnapshot;
+import jieqi.rules.BoardText;
 import jieqi.rules.CellState;
 import jieqi.rules.RuleEngine;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -23,13 +26,14 @@ public final class ExpectiAgent implements Agent {
 
     public static final int DEFAULT_MAX_DEPTH = 3;
     private static final int MAX_QUIESCENCE_DEPTH = 4;
+    private static final int MAX_ROOT_SEARCH_MOVES = 4;
+    private static final int MAX_SEARCH_MOVES_PER_NODE = 2;
     private static final int TIME_CHECK_INTERVAL_NODES = 2_048;
 
     private static final int WIN_SCORE = EvalWeights.KING_VALUE * 100;
     private static final int INF = WIN_SCORE * 10;
 
     private final int maxDepth;
-    private final int maxQuiescenceDepth;
     private final PositionEvaluator evaluator;
     private final MoveOrderer moveOrderer;
     private volatile SearchStats lastStats = new SearchStats(0, 0, 0, 0, false);
@@ -47,26 +51,10 @@ public final class ExpectiAgent implements Agent {
     }
 
     ExpectiAgent(int maxDepth, PositionEvaluator evaluator, MoveOrderer moveOrderer) {
-        this(maxDepth, MAX_QUIESCENCE_DEPTH, evaluator, moveOrderer);
-    }
-
-    ExpectiAgent(int maxDepth, int maxQuiescenceDepth) {
-        this(maxDepth, maxQuiescenceDepth, new PositionEvaluator(), new MoveOrderer());
-    }
-
-    private ExpectiAgent(
-            int maxDepth,
-            int maxQuiescenceDepth,
-            PositionEvaluator evaluator,
-            MoveOrderer moveOrderer) {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1");
         }
-        if (maxQuiescenceDepth < 0) {
-            throw new IllegalArgumentException("maxQuiescenceDepth must be >= 0");
-        }
         this.maxDepth = maxDepth;
-        this.maxQuiescenceDepth = maxQuiescenceDepth;
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
         this.moveOrderer = Objects.requireNonNull(moveOrderer, "moveOrderer");
     }
@@ -102,9 +90,10 @@ public final class ExpectiAgent implements Agent {
             return Optional.of(bestMove);
         }
 
+        List<Move> rootSearchMoves = limitRootSearchMoves(orderedLegalMoves);
         for (int depth = 1; depth <= maxDepth; depth++) {
             try {
-                RootResult result = searchRoot(board, side, orderedLegalMoves, rootBelief, depth, context);
+                RootResult result = searchRoot(board, side, rootSearchMoves, rootBelief, depth, context);
                 bestMove = result.move();
                 context.completedDepth = depth;
             } catch (SearchTimeout timeout) {
@@ -238,15 +227,36 @@ public final class ExpectiAgent implements Agent {
             int beta,
             BeliefState belief,
             SearchContext context) {
+        CacheKey cacheKey = null;
+        if (alpha == -INF && beta == INF) {
+            cacheKey = CacheKey.negamax(board, side, depth, belief);
+            Integer cached = context.exactScores.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        }
         context.enterNode();
+        int result;
         if (RuleEngine.isKingCaptured(board, side)) {
-            return -WIN_SCORE - depth;
+            result = -WIN_SCORE - depth;
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, result);
+            }
+            return result;
         }
         if (RuleEngine.isKingCaptured(board, side.opposite())) {
-            return WIN_SCORE + depth;
+            result = WIN_SCORE + depth;
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, result);
+            }
+            return result;
         }
         if (depth <= 0) {
-            return quiescence(board, side, alpha, beta, belief, context, 0);
+            result = quiescence(board, side, alpha, beta, belief, context, 0);
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, result);
+            }
+            return result;
         }
 
         List<Move> legalMoves = moveOrderer.order(
@@ -254,8 +264,13 @@ public final class ExpectiAgent implements Agent {
                 side,
                 RuleEngine.generateLegalMoves(board, side),
                 belief);
+        legalMoves = limitSearchMoves(legalMoves);
         if (legalMoves.isEmpty()) {
-            return evaluate(board, side, belief);
+            result = evaluate(board, side, belief);
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, result);
+            }
+            return result;
         }
 
         int best = -INF;
@@ -273,6 +288,9 @@ public final class ExpectiAgent implements Agent {
                 break;
             }
         }
+        if (cacheKey != null) {
+            context.exactScores.put(cacheKey, best);
+        }
         return best;
     }
 
@@ -284,21 +302,43 @@ public final class ExpectiAgent implements Agent {
             BeliefState belief,
             SearchContext context,
             int quiescenceDepth) {
+        CacheKey cacheKey = null;
+        if (alpha == -INF && beta == INF) {
+            cacheKey = CacheKey.quiescence(board, side, quiescenceDepth, belief);
+            Integer cached = context.exactScores.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        }
         context.enterQuiescenceNode();
         if (RuleEngine.isKingCaptured(board, side)) {
-            return -WIN_SCORE - quiescenceDepth;
+            int score = -WIN_SCORE - quiescenceDepth;
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, score);
+            }
+            return score;
         }
         if (RuleEngine.isKingCaptured(board, side.opposite())) {
-            return WIN_SCORE + quiescenceDepth;
+            int score = WIN_SCORE + quiescenceDepth;
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, score);
+            }
+            return score;
         }
 
         boolean inImmediateKingThreat = hasImmediateKingThreat(board, side);
         int standPat = evaluate(board, side, belief);
-        if (quiescenceDepth >= maxQuiescenceDepth) {
+        if (quiescenceDepth >= MAX_QUIESCENCE_DEPTH) {
+            if (cacheKey != null) {
+                context.exactScores.put(cacheKey, standPat);
+            }
             return standPat;
         }
         if (!inImmediateKingThreat) {
             if (standPat >= beta) {
+                if (cacheKey != null) {
+                    context.exactScores.put(cacheKey, standPat);
+                }
                 return standPat;
             }
             alpha = Math.max(alpha, standPat);
@@ -309,6 +349,7 @@ public final class ExpectiAgent implements Agent {
                 side,
                 RuleEngine.generateLegalMoves(board, side),
                 belief);
+        legalMoves = limitSearchMoves(legalMoves);
         int best = inImmediateKingThreat ? -INF : standPat;
         boolean searched = false;
         for (Move move : legalMoves) {
@@ -328,7 +369,10 @@ public final class ExpectiAgent implements Agent {
             }
         }
         if (inImmediateKingThreat && !searched) {
-            return -WIN_SCORE + quiescenceDepth;
+            best = -WIN_SCORE + quiescenceDepth;
+        }
+        if (cacheKey != null) {
+            context.exactScores.put(cacheKey, best);
         }
         return best;
     }
@@ -508,8 +552,12 @@ public final class ExpectiAgent implements Agent {
             Move move,
             BeliefState belief,
             boolean inImmediateKingThreat) {
-        if (capturesKing(board, move) || isCapture(board, move)) {
+        if (capturesKing(board, move)) {
             return true;
+        }
+        if (isCapture(board, move)) {
+            return board.cellAt(move.from()) instanceof CellState.Revealed
+                    && !(board.cellAt(move.to()) instanceof CellState.Hidden);
         }
         return inImmediateKingThreat && resolvesImmediateKingThreat(board, side, move, belief);
     }
@@ -545,6 +593,20 @@ public final class ExpectiAgent implements Agent {
         return !board.cellAt(move.to()).isEmpty();
     }
 
+    private List<Move> limitSearchMoves(List<Move> orderedMoves) {
+        if (orderedMoves.size() <= MAX_SEARCH_MOVES_PER_NODE) {
+            return orderedMoves;
+        }
+        return orderedMoves.subList(0, MAX_SEARCH_MOVES_PER_NODE);
+    }
+
+    private List<Move> limitRootSearchMoves(List<Move> orderedMoves) {
+        if (orderedMoves.size() <= MAX_ROOT_SEARCH_MOVES) {
+            return orderedMoves;
+        }
+        return orderedMoves.subList(0, MAX_ROOT_SEARCH_MOVES);
+    }
+
     private boolean capturesKing(BoardSnapshot board, Move move) {
         return board.cellAt(move.to()) instanceof CellState.Revealed revealed
                 && revealed.type() == PieceType.KING;
@@ -556,8 +618,34 @@ public final class ExpectiAgent implements Agent {
     private record RootResult(Move move, int score) {
     }
 
+    private record CacheKey(String board, Color side, int depth, String belief) {
+
+        private static CacheKey negamax(BoardSnapshot board, Color side, int depth, BeliefState belief) {
+            return new CacheKey(BoardText.format(board, side), side, depth, beliefKey(belief));
+        }
+
+        private static CacheKey quiescence(BoardSnapshot board, Color side, int quiescenceDepth, BeliefState belief) {
+            return new CacheKey(BoardText.format(board, side), side, -100 - quiescenceDepth, beliefKey(belief));
+        }
+
+        private static String beliefKey(BeliefState belief) {
+            StringBuilder key = new StringBuilder();
+            for (Color color : Color.values()) {
+                key.append(color).append(':');
+                for (PieceType type : PieceType.values()) {
+                    if (type != PieceType.KING) {
+                        key.append(type).append('=').append(belief.count(color, type)).append(';');
+                    }
+                }
+                key.append("u=").append(belief.unknownRemovals(color)).append('|');
+            }
+            return key.toString();
+        }
+    }
+
     private static final class SearchContext {
         private final TimeBudget budget;
+        private final Map<CacheKey, Integer> exactScores = new HashMap<>();
         private int completedDepth;
         private long searchedNodes;
         private long betaCutoffs;

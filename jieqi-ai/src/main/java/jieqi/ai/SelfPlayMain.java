@@ -15,8 +15,6 @@ public final class SelfPlayMain {
     static final String DEFAULT_BLACK_AGENT = "random";
     static final long DEFAULT_SEED = 1L;
     static final int DEFAULT_MAX_PLIES = 200;
-    private static final int SELF_PLAY_EXPECTI_DEPTH = 1;
-    private static final int SELF_PLAY_EXPECTI_QUIESCENCE_DEPTH = 0;
 
     private SelfPlayMain() {
     }
@@ -93,7 +91,7 @@ public final class SelfPlayMain {
             case "random" -> new RandomAgent(seed);
             case "greedy" -> new GreedyAgent();
             case "tactical" -> new TacticalAgent();
-            case "expecti" -> new ExpectiAgent(SELF_PLAY_EXPECTI_DEPTH, SELF_PLAY_EXPECTI_QUIESCENCE_DEPTH);
+            case "expecti" -> new ExpectiAgent();
             default -> throw new IllegalArgumentException("unsupported agent: " + agentType);
         };
     }

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SelfPlayGameTest {
@@ -91,8 +92,9 @@ class SelfPlayGameTest {
     }
 
     @Test
-    void expectiAgentSearchesAtLeastOneDepthDuringSelfPlay() {
-        ExpectiAgent expecti = new ExpectiAgent();
+    void selfPlayMainExpectiAgentUsesDefaultDepthDuringSelfPlay() {
+        Agent created = SelfPlayMain.createAgent("expecti", 1L);
+        ExpectiAgent expecti = assertInstanceOf(ExpectiAgent.class, created);
         SelfPlayGame game = new SelfPlayGame(
                 expecti,
                 new RandomAgent(1L),
@@ -102,7 +104,8 @@ class SelfPlayGameTest {
 
         game.play();
 
-        assertTrue(expecti.lastStats().completedDepth() >= 1);
+        assertEquals(ExpectiAgent.DEFAULT_MAX_DEPTH, expecti.lastStats().completedDepth());
+        assertEquals(3, expecti.lastStats().completedDepth());
         assertFalse(expecti.lastStats().timedOut());
     }
 
