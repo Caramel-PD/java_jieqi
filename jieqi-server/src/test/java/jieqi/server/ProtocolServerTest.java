@@ -822,10 +822,10 @@ class ProtocolServerTest {
         JsonObject redGameOver = game.red.lastOfType("gameOver");
         JsonObject blackGameOver = game.black.lastOfType("gameOver");
         assertEquals("draw", redGameOver.get("winner").getAsString());
-        assertEquals("noCapture", redGameOver.get("reason").getAsString());
+        assertEquals("draw_no_capture", redGameOver.get("reason").getAsString());
         assertFalse(redGameOver.has("winnerId"));
         assertEquals("draw", blackGameOver.get("winner").getAsString());
-        assertEquals("noCapture", blackGameOver.get("reason").getAsString());
+        assertEquals("draw_no_capture", blackGameOver.get("reason").getAsString());
         assertFalse(blackGameOver.has("winnerId"));
     }
 
@@ -854,7 +854,13 @@ class ProtocolServerTest {
 
         assertFalse(outcome.draw());
         assertEquals(Color.BLACK, outcome.winnerColor());
-        assertEquals("repetition", outcome.reason());
+        assertEquals("repetition_loss", outcome.reason());
+        JsonObject gameOver = JsonParser.parseString(Messages.gameOver(
+                outcome.winnerColor().name().toLowerCase(), outcome.reason(), "u2"))
+                .getAsJsonObject();
+        assertEquals("black", gameOver.get("winner").getAsString());
+        assertEquals("repetition_loss", gameOver.get("reason").getAsString());
+        assertEquals("u2", gameOver.get("winnerId").getAsString());
     }
 
     @Test
@@ -868,6 +874,20 @@ class ProtocolServerTest {
                 .getAsJsonObject();
         assertEquals("draw", gameOver.get("winner").getAsString());
         assertEquals("repetition_draw", gameOver.get("reason").getAsString());
+        assertFalse(gameOver.has("winnerId"));
+    }
+
+    @Test
+    void noCaptureVerdictMapsToDrawWithoutWinnerId() {
+        ProtocolServer.RepetitionOutcome outcome =
+                ProtocolServer.repetitionOutcome(RepetitionVerdict.DRAW_NO_CAPTURE, Color.RED);
+
+        assertTrue(outcome.draw());
+        assertEquals("draw_no_capture", outcome.reason());
+        JsonObject gameOver = JsonParser.parseString(Messages.gameOver("draw", outcome.reason(), null))
+                .getAsJsonObject();
+        assertEquals("draw", gameOver.get("winner").getAsString());
+        assertEquals("draw_no_capture", gameOver.get("reason").getAsString());
         assertFalse(gameOver.has("winnerId"));
     }
 

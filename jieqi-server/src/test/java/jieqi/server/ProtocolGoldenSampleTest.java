@@ -144,7 +144,7 @@ class ProtocolGoldenSampleTest {
 
         assertDrawGameOver("draw_agreed");
         assertDrawGameOver("repetition_draw");
-        assertDrawGameOver("noCapture");
+        assertDrawGameOver("draw_no_capture");
     }
 
     /**
