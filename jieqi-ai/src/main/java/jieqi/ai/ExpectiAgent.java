@@ -13,7 +13,11 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Minimal L2 search agent: fixed-depth negamax with alpha-beta pruning.
+ * Iterative-deepening Expecti/Negamax agent.
+ *
+ * <p>Ordinary decision nodes use alpha-beta pruning. Hidden-piece move nodes are chance nodes:
+ * every possible reveal type from the remaining {@link BeliefState} pool is searched with a full
+ * window and then combined by probability-weighted expectation.
  */
 public final class ExpectiAgent implements Agent {
 
@@ -94,6 +98,38 @@ public final class ExpectiAgent implements Agent {
 
     public SearchStats lastStats() {
         return lastStats;
+    }
+
+    int scoreMoveForTesting(PlayerView view, Move move, int depth, BeliefState belief, int alpha, int beta) {
+        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        return scoreMove(
+                view.informationBoard(),
+                view.sideToMove(),
+                move,
+                depth,
+                alpha,
+                beta,
+                belief.copy(),
+                context);
+    }
+
+    int scoreMoveAsRevealForTesting(
+            PlayerView view,
+            Move move,
+            int depth,
+            BeliefState belief,
+            PieceType flipAs) {
+        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        return scoreKnownMove(
+                view.informationBoard(),
+                view.sideToMove(),
+                move,
+                depth,
+                -INF,
+                INF,
+                belief.copy(),
+                context,
+                flipAs);
     }
 
     private RootResult searchRoot(
@@ -199,7 +235,7 @@ public final class ExpectiAgent implements Agent {
             SearchContext context) {
         CellState source = board.cellAt(move.from());
         if (source instanceof CellState.Hidden) {
-            return scoreHiddenMove(board, side, move, depth, alpha, beta, belief, context);
+            return scoreHiddenMove(board, side, move, depth, belief, context);
         }
         return scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, null);
     }
@@ -209,20 +245,20 @@ public final class ExpectiAgent implements Agent {
             Color side,
             Move move,
             int depth,
-            int alpha,
-            int beta,
             BeliefState belief,
             SearchContext context) {
         int poolSize = belief.poolSize(side);
         List<PieceType> availableTypes = belief.availableTypes(side);
         if (poolSize == 0 || availableTypes.isEmpty()) {
-            return scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, PieceType.PAWN);
+            context.checkTime();
+            return scoreKnownMove(board, side, move, depth, -INF, INF, belief, context, PieceType.PAWN);
         }
 
         long weightedScore = 0;
         for (PieceType flipAs : availableTypes) {
+            context.checkTime();
             int count = belief.count(side, flipAs);
-            int score = scoreKnownMove(board, side, move, depth, alpha, beta, belief, context, flipAs);
+            int score = scoreKnownMove(board, side, move, depth, -INF, INF, belief, context, flipAs);
             weightedScore += (long) score * count;
         }
         return (int) Math.round((double) weightedScore / poolSize);
