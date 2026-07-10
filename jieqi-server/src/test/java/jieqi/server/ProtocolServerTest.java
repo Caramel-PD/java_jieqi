@@ -460,6 +460,80 @@ class ProtocolServerTest {
     }
 
     @Test
+    void fromEnvDefaultsAreUsable() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of());
+
+        assertEquals(8887, config.port);
+        assertEquals(Path.of(".", "records"), config.recordsDir);
+        assertEquals(Path.of(".", "users.json"), config.usersFile);
+        assertEquals("virtual", config.initialBoardMode);
+    }
+
+    @Test
+    void legalEnvValuesOverrideServerConfigFields() {
+        Map<String, String> env = new HashMap<>();
+        env.put("JIEQI_HOME", "runtime-home");
+        env.put("JIEQI_PORT", "8899");
+        env.put("JIEQI_TURN_TIMEOUT_MS", "1200");
+        env.put("JIEQI_FIRSTHAND_WINDOW_MS", "300");
+        env.put("JIEQI_AUTO_READY_AFTER_MS", "75");
+        env.put("JIEQI_AUTO_REGISTER", "false");
+        env.put("JIEQI_REPETITION_LIMIT", "8");
+        env.put("JIEQI_REPETITION_MIN_REPEATS", "4");
+        env.put("JIEQI_NO_CAPTURE_LIMIT_HALF_MOVES", "16");
+        env.put("JIEQI_INITIAL_BOARD_MODE", "omit");
+        env.put("JIEQI_USERS_FILE", "custom-users.json");
+
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(env);
+
+        assertEquals(8899, config.port);
+        assertEquals(1200, config.turnTimeoutMs);
+        assertEquals(300, config.firstHandWindowMs);
+        assertEquals(75, config.autoReadyAfterMs);
+        assertFalse(config.autoRegisterOnLogin);
+        assertEquals(8, config.repetitionLimit);
+        assertEquals(4, config.repetitionMinRepeats);
+        assertEquals(16, config.noCaptureLimitHalfMoves);
+        assertEquals("omit", config.initialBoardMode);
+        assertEquals(Path.of("runtime-home", "records"), config.recordsDir);
+        assertEquals(Path.of("custom-users.json"), config.usersFile);
+    }
+
+    @Test
+    void invalidNumericEnvValuesFallbackToDefaults() {
+        Core.ServerConfig defaults = new Core.ServerConfig();
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of(
+                "JIEQI_PORT", "bad",
+                "JIEQI_REPETITION_LIMIT", "bad",
+                "JIEQI_REPETITION_MIN_REPEATS", "bad",
+                "JIEQI_NO_CAPTURE_LIMIT_HALF_MOVES", "bad"
+        ));
+
+        assertEquals(defaults.port, config.port);
+        assertEquals(defaults.repetitionLimit, config.repetitionLimit);
+        assertEquals(defaults.repetitionMinRepeats, config.repetitionMinRepeats);
+        assertEquals(defaults.noCaptureLimitHalfMoves, config.noCaptureLimitHalfMoves);
+    }
+
+    @Test
+    void recordsDirEnvOverridesRecordsDir() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of(
+                "JIEQI_HOME", "runtime-home",
+                "JIEQI_RECORDS_DIR", "custom-records"
+        ));
+
+        assertEquals(Path.of("custom-records"), config.recordsDir);
+        assertEquals(Path.of("runtime-home", "users.json"), config.usersFile);
+    }
+
+    @Test
+    void initialBoardModeOmitCanBeLoadedFromEnv() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of("JIEQI_INITIAL_BOARD_MODE", "omit"));
+
+        assertEquals("omit", config.initialBoardMode);
+    }
+
+    @Test
     void blackRequestFirstHandAndRedDoesNotMakesBlackBecomeRed() {
         StartedGame game = startGame(false, true);
 
