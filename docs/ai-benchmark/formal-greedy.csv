@@ -1,0 +1,11 @@
+agent,opponent,side,games,wins,losses,draws,winRate,averagePlies,seed,maxPlies,avgNodesPerMove,avgDepth,timeouts,ttHits,ttStores,ttCutoffs
+expecti,greedy,red,40,39,1,0,0.9750,27.03,1,200,166.52,0.54,40,827,92729,741
+expecti,greedy,black,40,35,0,5,0.8750,53.30,1,200,210.46,0.90,40,28210,222954,27466
+expecti,greedy,red,40,37,3,0,0.9250,26.38,2,200,181.73,0.46,40,8112,98721,6233
+expecti,greedy,black,40,33,0,7,0.8250,74.85,2,200,263.95,1.20,40,53781,393150,50010
+expecti,greedy,red,40,35,2,3,0.8750,40.08,3,200,206.14,1.09,40,18066,168176,14497
+expecti,greedy,black,40,39,0,1,0.9750,36.45,3,200,207.61,0.74,40,6727,150510,6687
+expecti,greedy,red,40,36,3,1,0.9000,30.45,4,200,129.80,0.56,40,8298,80735,8104
+expecti,greedy,black,40,34,2,4,0.8500,57.55,4,200,243.45,0.86,40,34497,278438,33347
+expecti,greedy,red,40,36,4,0,0.9000,26.60,5,200,172.60,0.54,40,2611,94428,2276
+expecti,greedy,black,40,33,2,5,0.8250,66.00,5,200,387.21,1.01,40,36293,509037,33935

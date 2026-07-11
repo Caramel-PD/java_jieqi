@@ -1,0 +1,2 @@
+agent,opponent,totalGames,wins,losses,draws,winRate,averagePlies,seedCount
+expecti,random,400,398,2,0,0.9950,17.01,5
