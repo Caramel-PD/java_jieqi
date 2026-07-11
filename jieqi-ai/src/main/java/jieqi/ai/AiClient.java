@@ -21,11 +21,13 @@ import java.util.function.Consumer;
 public final class AiClient {
 
     private static final Gson GSON = new Gson();
+    static final int MAX_TEXT_MESSAGE_CHARS = 1024 * 1024;
 
     private final AiClientConfig config;
     private final Agent agent;
     private final Consumer<String> logger;
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
+    private final StringBuilder textBuffer = new StringBuilder();
     private Consumer<String> outbound;
     private volatile AiGameState gameState;
     private volatile MoveResultMessage lastMoveResult;
@@ -173,6 +175,22 @@ public final class AiClient {
         return stopped;
     }
 
+    CompletionStage<?> receiveTextForTesting(CharSequence data, boolean last) {
+        return receiveText(null, data, last);
+    }
+
+    void onErrorForTesting(Throwable error) {
+        handleConnectionError(error);
+    }
+
+    void onCloseForTesting() {
+        handleConnectionClosed();
+    }
+
+    int bufferedTextLengthForTesting() {
+        return textBuffer.length();
+    }
+
     public void awaitStopped() throws InterruptedException {
         stoppedLatch.await();
     }
@@ -185,6 +203,47 @@ public final class AiClient {
         outbound.accept(GSON.toJson(json));
     }
 
+    private CompletionStage<?> receiveText(WebSocket webSocket, CharSequence data, boolean last) {
+        Objects.requireNonNull(data, "data");
+        try {
+            if (stopped) {
+                clearTextBuffer();
+                return CompletableFuture.completedFuture(null);
+            }
+            if ((long) textBuffer.length() + data.length() > MAX_TEXT_MESSAGE_CHARS) {
+                clearTextBuffer();
+                log("connection error: text message exceeds " + MAX_TEXT_MESSAGE_CHARS + " chars");
+                stop("connection stopped");
+                return CompletableFuture.completedFuture(null);
+            }
+            textBuffer.append(data);
+            if (last) {
+                String completeMessage = textBuffer.toString();
+                clearTextBuffer();
+                try {
+                    handleServerMessage(completeMessage);
+                } catch (RuntimeException error) {
+                    clearTextBuffer();
+                    log("connection error: failed to handle text message: " + errorMessage(error));
+                }
+            }
+            return CompletableFuture.completedFuture(null);
+        } finally {
+            requestNext(webSocket);
+        }
+    }
+
+    private void handleConnectionError(Throwable error) {
+        clearTextBuffer();
+        log("connection error: " + errorMessage(error));
+        stop("connection stopped");
+    }
+
+    private void handleConnectionClosed() {
+        clearTextBuffer();
+        stop("connection stopped");
+    }
+
     private void stop(String message) {
         if (!stopped) {
             stopped = true;
@@ -195,6 +254,21 @@ public final class AiClient {
 
     private void log(String message) {
         logger.accept(message);
+    }
+
+    private void clearTextBuffer() {
+        textBuffer.setLength(0);
+    }
+
+    private static void requestNext(WebSocket webSocket) {
+        if (webSocket != null) {
+            webSocket.request(1);
+        }
+    }
+
+    private static String errorMessage(Throwable error) {
+        String message = error.getMessage();
+        return message == null ? error.getClass().getSimpleName() : message;
     }
 
     private static JsonObject base(String messageType) {
@@ -218,16 +292,18 @@ public final class AiClient {
 
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-            handleServerMessage(data.toString());
-            webSocket.request(1);
-            return CompletableFuture.completedFuture(null);
+            return receiveText(webSocket, data, last);
         }
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            log("connection error: " + error.getMessage());
-            stop("game over");
-            error.printStackTrace(System.err);
+            handleConnectionError(error);
+        }
+
+        @Override
+        public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            handleConnectionClosed();
+            return CompletableFuture.completedFuture(null);
         }
     }
 }
