@@ -1,0 +1,11 @@
+agent,opponent,side,games,wins,losses,draws,winRate,averagePlies,seed,maxPlies,measuredMoves,timeoutMoves,timeoutRate,avgNodesPerMove,avgDepth,ttHits,ttStores,ttCutoffs
+expecti,random,red,40,39,1,0,0.9750,18.03,1,200,380,269,0.7079,259.02,0.48,7224,98250,5734
+expecti,random,black,40,40,0,0,1.0000,16.05,1,200,321,235,0.7321,91.18,0.25,0,29079,0
+expecti,random,red,40,40,0,0,1.0000,18.40,2,200,388,289,0.7448,193.55,0.42,133,74876,131
+expecti,random,black,40,40,0,0,1.0000,17.90,2,200,358,254,0.7095,100.89,0.33,3,35934,3
+expecti,random,red,40,40,0,0,1.0000,15.45,3,200,329,244,0.7416,175.85,0.34,563,57668,487
+expecti,random,black,40,40,0,0,1.0000,18.25,3,200,365,268,0.7342,197.24,0.35,1626,71788,1603
+expecti,random,red,40,40,0,0,1.0000,16.75,4,200,355,265,0.7465,152.71,0.33,1,54002,1
+expecti,random,black,40,40,0,0,1.0000,18.35,4,200,367,270,0.7357,138.84,0.33,3,50744,2
+expecti,random,red,40,40,0,0,1.0000,18.15,5,200,383,284,0.7415,202.19,0.44,809,77220,763
+expecti,random,black,40,39,1,0,0.9750,16.03,5,200,320,233,0.7281,140.26,0.30,4,44701,2
