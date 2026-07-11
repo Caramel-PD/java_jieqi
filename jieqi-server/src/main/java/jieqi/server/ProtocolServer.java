@@ -625,9 +625,9 @@ final class ProtocolServer {
     static RepetitionOutcome repetitionOutcome(RepetitionVerdict verdict, Color mover) {
         return switch (verdict) {
             case NONE -> null;
-            case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition");
-            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition");
-            case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "noCapture");
+            case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition_loss");
+            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition_draw");
+            case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "draw_no_capture");
         };
     }
 
@@ -1265,7 +1265,7 @@ final class ProtocolServer {
          *
          * @param reason 和棋原因。
          * @throws RuntimeException 当发送消息失败时可能由通道抛出；棋谱写失败会被捕获并记录。
-         * @apiNote 使用示例：80 半步无吃子触发 {@code finishDraw("noCapture")}。
+         * @apiNote 使用示例：80 半步无吃子触发 {@code finishDraw("draw_no_capture")}。
          */
         private void finishDraw(String reason) {
             if (finished) {
