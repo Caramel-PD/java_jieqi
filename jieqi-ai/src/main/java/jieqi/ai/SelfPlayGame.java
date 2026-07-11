@@ -22,6 +22,8 @@ import java.util.Random;
  */
 public final class SelfPlayGame {
 
+    private static final long SELF_PLAY_THINK_TIME_MILLIS = 200;
+
     public enum Winner {
         RED,
         BLACK,
@@ -130,7 +132,7 @@ public final class SelfPlayGame {
     }
 
     private Move selectMove(Agent agent, PlayerView view, List<Move> legalMoves) {
-        Optional<Move> selected = agent.selectMove(view, TimeBudget.unlimited());
+        Optional<Move> selected = agent.selectMove(view, TimeBudget.ofMillis(SELF_PLAY_THINK_TIME_MILLIS));
         if (selected.isEmpty()) {
             throw new IllegalStateException("agent returned no move while legal moves exist");
         }

@@ -64,6 +64,20 @@ class MoveOrdererTest {
     }
 
     @Test
+    void moveOrderingDoesNotChangeLegalMoveSet() {
+        BoardText.ParsedPosition position = BoardText.parse("""
+                r3k3r/9/9/9/9/9/9/9/9/R3K3R r
+                """);
+        BoardSnapshot board = position.board();
+        List<Move> legalMoves = RuleEngine.generateLegalMoves(board, position.sideToMove());
+
+        List<Move> ordered = orderer.order(board, position.sideToMove(), legalMoves, BeliefState.initial());
+
+        assertEquals(legalMoves.size(), ordered.size());
+        assertEquals(new HashSet<>(legalMoves), new HashSet<>(ordered));
+    }
+
+    @Test
     void orderingIsDeterministic() {
         BoardText.ParsedPosition position = BoardText.parse(BoardText.INITIAL);
         BoardSnapshot board = position.board();

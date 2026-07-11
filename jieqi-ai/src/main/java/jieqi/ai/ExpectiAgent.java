@@ -26,8 +26,6 @@ public final class ExpectiAgent implements Agent {
 
     public static final int DEFAULT_MAX_DEPTH = 3;
     private static final int MAX_QUIESCENCE_DEPTH = 4;
-    private static final int MAX_ROOT_SEARCH_MOVES = 4;
-    private static final int MAX_SEARCH_MOVES_PER_NODE = 2;
     private static final int TIME_CHECK_INTERVAL_NODES = 2_048;
 
     private static final int WIN_SCORE = EvalWeights.KING_VALUE * 100;
@@ -90,10 +88,9 @@ public final class ExpectiAgent implements Agent {
             return Optional.of(bestMove);
         }
 
-        List<Move> rootSearchMoves = limitRootSearchMoves(orderedLegalMoves);
         for (int depth = 1; depth <= maxDepth; depth++) {
             try {
-                RootResult result = searchRoot(board, side, rootSearchMoves, rootBelief, depth, context);
+                RootResult result = searchRoot(board, side, orderedLegalMoves, rootBelief, depth, context);
                 bestMove = result.move();
                 context.completedDepth = depth;
             } catch (SearchTimeout timeout) {
@@ -264,7 +261,6 @@ public final class ExpectiAgent implements Agent {
                 side,
                 RuleEngine.generateLegalMoves(board, side),
                 belief);
-        legalMoves = limitSearchMoves(legalMoves);
         if (legalMoves.isEmpty()) {
             result = evaluate(board, side, belief);
             if (cacheKey != null) {
@@ -349,7 +345,6 @@ public final class ExpectiAgent implements Agent {
                 side,
                 RuleEngine.generateLegalMoves(board, side),
                 belief);
-        legalMoves = limitSearchMoves(legalMoves);
         int best = inImmediateKingThreat ? -INF : standPat;
         boolean searched = false;
         for (Move move : legalMoves) {
@@ -556,8 +551,7 @@ public final class ExpectiAgent implements Agent {
             return true;
         }
         if (isCapture(board, move)) {
-            return board.cellAt(move.from()) instanceof CellState.Revealed
-                    && !(board.cellAt(move.to()) instanceof CellState.Hidden);
+            return true;
         }
         return inImmediateKingThreat && resolvesImmediateKingThreat(board, side, move, belief);
     }
@@ -591,20 +585,6 @@ public final class ExpectiAgent implements Agent {
 
     private boolean isCapture(BoardSnapshot board, Move move) {
         return !board.cellAt(move.to()).isEmpty();
-    }
-
-    private List<Move> limitSearchMoves(List<Move> orderedMoves) {
-        if (orderedMoves.size() <= MAX_SEARCH_MOVES_PER_NODE) {
-            return orderedMoves;
-        }
-        return orderedMoves.subList(0, MAX_SEARCH_MOVES_PER_NODE);
-    }
-
-    private List<Move> limitRootSearchMoves(List<Move> orderedMoves) {
-        if (orderedMoves.size() <= MAX_ROOT_SEARCH_MOVES) {
-            return orderedMoves;
-        }
-        return orderedMoves.subList(0, MAX_ROOT_SEARCH_MOVES);
     }
 
     private boolean capturesKing(BoardSnapshot board, Move move) {

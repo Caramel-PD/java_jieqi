@@ -97,6 +97,33 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void searchDoesNotDropMovesOutsideOrderedPrefix() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/R3K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.selectMove(view, TimeBudget.unlimited());
+
+        assertTrue(view.legalMoves().size() > 4);
+        assertTrue(agent.lastStats().searchedNodes() >= view.legalMoves().size());
+    }
+
+    @Test
+    void innerSearchDoesNotKeepOnlyFirstTwoMoves() {
+        PlayerView view = viewOf("""
+                4k3r/4p4/9/9/9/9/9/9/4P4/1R2K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(2);
+        int rootMoveCount = view.legalMoves().size();
+
+        agent.selectMove(view, TimeBudget.unlimited());
+
+        assertTrue(rootMoveCount > 4);
+        assertTrue(agent.lastStats().searchedNodes() > rootMoveCount * 3L);
+    }
+
+    @Test
     void timedOutStatsIsTrueWhenBudgetTooSmall() {
         PlayerView view = viewOf(BoardText.INITIAL);
         ExpectiAgent agent = new ExpectiAgent();
@@ -224,6 +251,19 @@ class ExpectiAgentTest {
         int chanceScore = agent.scoreQuiescenceMoveForTesting(view, hiddenCapture, belief);
 
         assertEquals(expected, chanceScore);
+    }
+
+    @Test
+    void hiddenCaptureIsExpandedByQuiescence() {
+        BeliefState belief = beliefKeeping(Color.RED, PieceType.ROOK, PieceType.PAWN);
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/p8/X3P4/9/9/4K4 r
+                """, belief);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.quiescenceScoreForTesting(view);
+
+        assertTrue(agent.lastStats().quiescenceNodes() > 1);
     }
 
     @Test
