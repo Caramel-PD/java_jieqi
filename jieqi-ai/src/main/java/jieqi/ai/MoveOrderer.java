@@ -37,13 +37,20 @@ public final class MoveOrderer {
         Objects.requireNonNull(legalMoves, "legalMoves");
         Objects.requireNonNull(belief, "belief");
 
-        List<Move> ordered = new ArrayList<>(legalMoves);
-        ordered.sort(Comparator
-                .comparingInt((Move move) -> score(board, side, move, belief)).reversed()
-                .thenComparingInt(move -> move.from().file())
-                .thenComparingInt(move -> move.from().rank())
-                .thenComparingInt(move -> move.to().file())
-                .thenComparingInt(move -> move.to().rank()));
+        List<ScoredMove> scoredMoves = new ArrayList<>(legalMoves.size());
+        for (Move move : legalMoves) {
+            scoredMoves.add(new ScoredMove(move, score(board, side, move, belief)));
+        }
+        scoredMoves.sort(Comparator
+                .comparingInt(ScoredMove::score).reversed()
+                .thenComparingInt(scored -> scored.move().from().file())
+                .thenComparingInt(scored -> scored.move().from().rank())
+                .thenComparingInt(scored -> scored.move().to().file())
+                .thenComparingInt(scored -> scored.move().to().rank()));
+        List<Move> ordered = new ArrayList<>(scoredMoves.size());
+        for (ScoredMove scored : scoredMoves) {
+            ordered.add(scored.move());
+        }
         if (priorityMove != null) {
             int index = ordered.indexOf(priorityMove);
             if (index > 0) {
@@ -109,5 +116,8 @@ public final class MoveOrderer {
             return belief.expectedValue(hidden.color());
         }
         return 0;
+    }
+
+    private record ScoredMove(Move move, int score) {
     }
 }

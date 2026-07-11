@@ -1,11 +1,13 @@
 package jieqi.ai;
 
 import jieqi.common.Color;
+import jieqi.common.Coord;
 import jieqi.common.Move;
 import jieqi.common.PieceType;
 import jieqi.rules.BoardSnapshot;
-import jieqi.rules.BoardText;
+import jieqi.rules.CellState;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -18,10 +20,23 @@ public final class TranspositionTable {
 
     public static final int DEFAULT_MAX_CAPACITY = 100_000;
 
+    private static final int BOARD_WORD_COUNT = 8;
+    private static final int CELL_BITS = 5;
+    private static final int CELLS_PER_WORD = Long.SIZE / CELL_BITS;
+    private static final Coord[][] COORDS = createCoords();
+    private static final PieceType[] HIDDEN_POOL_TYPES = {
+            PieceType.ROOK,
+            PieceType.KNIGHT,
+            PieceType.CANNON,
+            PieceType.PAWN,
+            PieceType.GUARD,
+            PieceType.BISHOP
+    };
+
     private static final TranspositionTable DISABLED = new TranspositionTable(0);
 
     private final int maxCapacity;
-    private final Map<String, TranspositionEntry> entries = new HashMap<>();
+    private final Map<PositionKey, TranspositionEntry> entries = new HashMap<>();
     private int generation;
 
     public TranspositionTable() {
@@ -39,27 +54,25 @@ public final class TranspositionTable {
         return DISABLED;
     }
 
-    public static String positionKey(BoardSnapshot board, Color side, BeliefState belief) {
+    public static PositionKey positionKey(BoardSnapshot board, Color side, BeliefState belief) {
         Objects.requireNonNull(board, "board");
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(belief, "belief");
 
-        StringBuilder key = new StringBuilder(BoardText.format(board, side))
-                .append("|side=").append(side)
-                .append("|belief=");
-        for (Color color : Color.values()) {
-            key.append(color).append(':');
-            for (PieceType type : PieceType.values()) {
-                if (type != PieceType.KING) {
-                    key.append(type).append('=').append(belief.count(color, type)).append(';');
-                }
+        long[] boardWords = new long[BOARD_WORD_COUNT];
+        int square = 0;
+        for (int rank = 0; rank < 10; rank++) {
+            for (int file = 0; file < 9; file++) {
+                int word = square / CELLS_PER_WORD;
+                int offset = (square % CELLS_PER_WORD) * CELL_BITS;
+                boardWords[word] |= (long) cellCode(board.cellAt(COORDS[rank][file])) << offset;
+                square++;
             }
-            key.append("u=").append(belief.unknownRemovals(color)).append('|');
         }
-        return key.toString();
+        return new PositionKey(boardWords, side.code, beliefBits(belief));
     }
 
-    public ProbeResult probe(String positionKey, int requiredDepth, int alpha, int beta) {
+    public ProbeResult probe(PositionKey positionKey, int requiredDepth, int alpha, int beta) {
         Objects.requireNonNull(positionKey, "positionKey");
         if (requiredDepth < 0) {
             throw new IllegalArgumentException("requiredDepth must be >= 0");
@@ -84,12 +97,12 @@ public final class TranspositionTable {
         return ProbeResult.hit(cutoff, entry.score(), adjustedAlpha, adjustedBeta, entry);
     }
 
-    public Optional<TranspositionEntry> entry(String positionKey) {
+    public Optional<TranspositionEntry> entry(PositionKey positionKey) {
         Objects.requireNonNull(positionKey, "positionKey");
         return Optional.ofNullable(entries.get(positionKey));
     }
 
-    public Optional<Move> bestMove(String positionKey) {
+    public Optional<Move> bestMove(PositionKey positionKey) {
         return entry(positionKey).flatMap(TranspositionEntry::bestMoveOptional);
     }
 
@@ -122,6 +135,81 @@ public final class TranspositionTable {
 
     public int generation() {
         return generation;
+    }
+
+    private static int cellCode(CellState cell) {
+        if (cell.isEmpty()) {
+            return 0;
+        }
+        if (cell instanceof CellState.Hidden hidden) {
+            return hidden.color().code + 1;
+        }
+        CellState.Revealed revealed = (CellState.Revealed) cell;
+        return 3 + revealed.color().code * PieceType.values().length + revealed.type().code;
+    }
+
+    private static long beliefBits(BeliefState belief) {
+        long bits = 0;
+        int shift = 0;
+        for (Color color : Color.values()) {
+            for (PieceType type : HIDDEN_POOL_TYPES) {
+                bits |= (long) belief.count(color, type) << shift;
+                shift += 3;
+            }
+            bits |= (long) belief.unknownRemovals(color) << shift;
+            shift += 5;
+        }
+        return bits;
+    }
+
+    private static Coord[][] createCoords() {
+        Coord[][] coords = new Coord[10][9];
+        for (int rank = 0; rank < 10; rank++) {
+            for (int file = 0; file < 9; file++) {
+                coords[rank][file] = new Coord(file, rank);
+            }
+        }
+        return coords;
+    }
+
+    public static final class PositionKey {
+        private final long[] boardWords;
+        private final int sideCode;
+        private final long beliefBits;
+        private final int hash;
+
+        private PositionKey(long[] boardWords, int sideCode, long beliefBits) {
+            this.boardWords = boardWords;
+            this.sideCode = sideCode;
+            this.beliefBits = beliefBits;
+            int result = Arrays.hashCode(boardWords);
+            result = 31 * result + sideCode;
+            result = 31 * result + Long.hashCode(beliefBits);
+            this.hash = result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof PositionKey other)) {
+                return false;
+            }
+            return sideCode == other.sideCode
+                    && beliefBits == other.beliefBits
+                    && Arrays.equals(boardWords, other.boardWords);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+
+        @Override
+        public String toString() {
+            return "PositionKey{hash=" + hash + ",side=" + sideCode + ",belief=" + beliefBits + '}';
+        }
     }
 
     public record ProbeResult(

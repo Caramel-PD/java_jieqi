@@ -11,6 +11,7 @@ import jieqi.rules.RuleEngine;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Iterative-deepening Expecti/Negamax agent.
@@ -24,6 +25,8 @@ public final class ExpectiAgent implements Agent {
     public static final int DEFAULT_MAX_DEPTH = 3;
     private static final int MAX_QUIESCENCE_DEPTH = 4;
     private static final int TIME_CHECK_INTERVAL_NODES = 2_048;
+    private static final long NEXT_DEPTH_SAFETY_FACTOR = 2L;
+    private static final long MIN_NEXT_DEPTH_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
 
     private static final int WIN_SCORE = EvalWeights.KING_VALUE * 100;
     private static final int INF = WIN_SCORE * 10;
@@ -96,10 +99,15 @@ public final class ExpectiAgent implements Agent {
         }
 
         for (int depth = 1; depth <= maxDepth; depth++) {
+            long depthStarted = System.nanoTime();
             try {
                 RootResult result = searchRoot(board, side, orderedLegalMoves, rootBelief, depth, context);
                 bestMove = result.move();
                 context.completedDepth = depth;
+                long depthElapsedNanos = System.nanoTime() - depthStarted;
+                if (shouldStopBeforeNextDepth(budget, depth, depthElapsedNanos)) {
+                    break;
+                }
             } catch (SearchTimeout timeout) {
                 context.timedOut = true;
                 break;
@@ -206,7 +214,7 @@ public final class ExpectiAgent implements Agent {
             BeliefState belief,
             int depth,
             SearchContext context) {
-        String positionKey = TranspositionTable.positionKey(board, side, belief);
+        TranspositionTable.PositionKey positionKey = TranspositionTable.positionKey(board, side, belief);
         int alpha = -INF;
         int beta = INF;
         int originalAlpha = alpha;
@@ -247,7 +255,7 @@ public final class ExpectiAgent implements Agent {
             int beta,
             BeliefState belief,
             SearchContext context) {
-        String positionKey = TranspositionTable.positionKey(board, side, belief);
+        TranspositionTable.PositionKey positionKey = TranspositionTable.positionKey(board, side, belief);
         int originalAlpha = alpha;
         int originalBeta = beta;
         TranspositionTable.ProbeResult probe = context.probe(positionKey, depth, alpha, beta);
@@ -370,6 +378,21 @@ public final class ExpectiAgent implements Agent {
         int material = material(board, side, belief);
         int mobility = evaluator.mobilityScore(board, side) - evaluator.mobilityScore(board, side.opposite());
         return material * 10 + mobility;
+    }
+
+    private boolean shouldStopBeforeNextDepth(TimeBudget budget, int completedDepth, long depthElapsedNanos) {
+        if (completedDepth >= maxDepth) {
+            return false;
+        }
+        long remaining = budget.remainingNanos();
+        if (remaining == Long.MAX_VALUE) {
+            return false;
+        }
+        long scaled = depthElapsedNanos > Long.MAX_VALUE / NEXT_DEPTH_SAFETY_FACTOR
+                ? Long.MAX_VALUE
+                : depthElapsedNanos * NEXT_DEPTH_SAFETY_FACTOR;
+        long required = Math.max(MIN_NEXT_DEPTH_NANOS, scaled);
+        return remaining <= required;
     }
 
     private int material(BoardSnapshot board, Color perspective, BeliefState belief) {
@@ -588,7 +611,7 @@ public final class ExpectiAgent implements Agent {
 
     private void storeBound(
             SearchContext context,
-            String positionKey,
+            TranspositionTable.PositionKey positionKey,
             int depth,
             int score,
             int originalAlpha,
@@ -647,7 +670,11 @@ public final class ExpectiAgent implements Agent {
             }
         }
 
-        private TranspositionTable.ProbeResult probe(String positionKey, int depth, int alpha, int beta) {
+        private TranspositionTable.ProbeResult probe(
+                TranspositionTable.PositionKey positionKey,
+                int depth,
+                int alpha,
+                int beta) {
             TranspositionTable.ProbeResult result = transpositionTable.probe(positionKey, depth, alpha, beta);
             if (result.hit()) {
                 ttHits++;
@@ -658,7 +685,7 @@ public final class ExpectiAgent implements Agent {
             return result;
         }
 
-        private Optional<Move> bestMove(String positionKey) {
+        private Optional<Move> bestMove(TranspositionTable.PositionKey positionKey) {
             return transpositionTable.bestMove(positionKey);
         }
 

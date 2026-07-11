@@ -17,7 +17,7 @@ class TranspositionTableTest {
     @Test
     void exactEntryCanBeReused() {
         TranspositionTable table = new TranspositionTable(8);
-        String key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
         Move bestMove = Move.parse("e1e2");
 
         table.store(new TranspositionEntry(key, 3, 42, BoundType.EXACT, bestMove));
@@ -33,7 +33,7 @@ class TranspositionTableTest {
     @Test
     void shallowEntryCannotReplaceDeepSearch() {
         TranspositionTable table = new TranspositionTable(8);
-        String key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
 
         table.store(new TranspositionEntry(key, 1, 10, BoundType.EXACT, Move.parse("e1e2")));
 
@@ -45,7 +45,7 @@ class TranspositionTableTest {
     @Test
     void exactEntryAtSameDepthKeepsStrongerBound() {
         TranspositionTable table = new TranspositionTable(8);
-        String key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
 
         table.store(new TranspositionEntry(key, 3, 42, BoundType.EXACT, Move.parse("e1e2")));
         table.store(new TranspositionEntry(key, 3, 7, BoundType.LOWER, Move.parse("e1e0")));
@@ -59,7 +59,7 @@ class TranspositionTableTest {
     @Test
     void lowerBoundRaisesAlphaOnly() {
         TranspositionTable table = new TranspositionTable(8);
-        String key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
 
         table.store(new TranspositionEntry(key, 3, 30, BoundType.LOWER, Move.parse("e1e2")));
 
@@ -74,7 +74,7 @@ class TranspositionTableTest {
     @Test
     void upperBoundLowersBetaOnly() {
         TranspositionTable table = new TranspositionTable(8);
-        String key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey key = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
 
         table.store(new TranspositionEntry(key, 3, 70, BoundType.UPPER, Move.parse("e1e2")));
 
@@ -88,30 +88,68 @@ class TranspositionTableTest {
 
     @Test
     void beliefStateIsPartOfKey() {
-        String initialKey = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey initialKey =
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
         BeliefState changed = BeliefState.initial();
 
         changed.recordKnownReveal(Color.RED, PieceType.ROOK);
         changed.recordUnknownRemoval(Color.BLACK);
 
-        String changedKey = keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", changed);
+        TranspositionTable.PositionKey changedKey =
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", changed);
 
         assertNotEquals(initialKey, changedKey);
+    }
+
+    @Test
+    void sideToMoveIsPartOfKey() {
+        TranspositionTable.PositionKey redToMove =
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey blackToMove =
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 b", BeliefState.initial());
+
+        assertNotEquals(redToMove, blackToMove);
+    }
+
+    @Test
+    void compactKeyKeepsDifferentBoardsSeparate() {
+        TranspositionTable.PositionKey first =
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial());
+        TranspositionTable.PositionKey second =
+                keyOf("4k4/9/9/9/9/9/9/4P4/9/4K4 r", BeliefState.initial());
+
+        assertNotEquals(first, second);
+        assertFalse(first.toString().contains("/"));
     }
 
     @Test
     void tableCapacityIsBounded() {
         TranspositionTable table = new TranspositionTable(2);
 
-        table.store(new TranspositionEntry("a", 1, 1, BoundType.EXACT, null));
-        table.store(new TranspositionEntry("b", 1, 2, BoundType.EXACT, null));
-        table.store(new TranspositionEntry("c", 1, 3, BoundType.EXACT, null));
+        table.store(new TranspositionEntry(
+                keyOf("4k4/9/9/9/9/9/9/9/4P4/4K4 r", BeliefState.initial()),
+                1,
+                1,
+                BoundType.EXACT,
+                null));
+        table.store(new TranspositionEntry(
+                keyOf("4k4/9/9/9/9/9/9/4P4/9/4K4 r", BeliefState.initial()),
+                1,
+                2,
+                BoundType.EXACT,
+                null));
+        table.store(new TranspositionEntry(
+                keyOf("4k4/9/9/9/9/4P4/9/9/9/4K4 r", BeliefState.initial()),
+                1,
+                3,
+                BoundType.EXACT,
+                null));
 
         assertTrue(table.size() <= 2);
         assertTrue(table.generation() > 0);
     }
 
-    private static String keyOf(String boardText, BeliefState belief) {
+    private static TranspositionTable.PositionKey keyOf(String boardText, BeliefState belief) {
         BoardText.ParsedPosition position = BoardText.parse(boardText);
         return TranspositionTable.positionKey(position.board(), position.sideToMove(), belief);
     }

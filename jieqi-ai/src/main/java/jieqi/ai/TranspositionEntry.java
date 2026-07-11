@@ -9,16 +9,14 @@ import java.util.Optional;
  * One cached alpha-beta search result.
  */
 public record TranspositionEntry(
-        String positionKey,
+        TranspositionTable.PositionKey positionKey,
         int depth,
         int score,
         BoundType boundType,
         Move bestMove) {
 
     public TranspositionEntry {
-        if (positionKey == null || positionKey.isBlank()) {
-            throw new IllegalArgumentException("positionKey must not be blank");
-        }
+        Objects.requireNonNull(positionKey, "positionKey");
         if (depth < 0) {
             throw new IllegalArgumentException("depth must be >= 0");
         }
