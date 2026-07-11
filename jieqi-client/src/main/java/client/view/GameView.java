@@ -36,6 +36,8 @@ import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
@@ -85,6 +87,7 @@ public class GameView extends Pane {
     private boolean gameOver = false;
     private boolean flipped = false;
     private TranslateTransition moveTransition;
+    private final Deque<MoveAnimation> moveAnimations = new ArrayDeque<>();
 
     public GameView(GameController controller) {
         this.controller = controller;
@@ -473,11 +476,22 @@ public class GameView extends Pane {
     }
 
     public void applyMoveResultAnimated(JsonNode moveNode, String flipResult, String capturedPiece) {
-        cancelMoveAnimation();
+        moveAnimations.addLast(new MoveAnimation(moveNode, flipResult, capturedPiece));
+        playNextMoveAnimation();
+    }
+
+    private void playNextMoveAnimation() {
+        if (moveTransition != null || moveAnimations.isEmpty()) {
+            return;
+        }
+        MoveAnimation request = moveAnimations.getFirst();
+        JsonNode moveNode = request.moveNode();
         String fromKey = moveNode.path("fromX").asText() + moveNode.path("fromY").asInt();
         ChessPiece moving = pieceMap.get(fromKey);
         if (moving == null || !boardLayer.isVisible()) {
-            applyMoveResult(moveNode, flipResult, capturedPiece);
+            moveAnimations.removeFirst();
+            applyMoveResult(moveNode, request.flipResult(), request.capturedPiece());
+            playNextMoveAnimation();
             return;
         }
 
@@ -492,16 +506,19 @@ public class GameView extends Pane {
             moving.setTranslateX(0);
             moving.setTranslateY(0);
             moveTransition = null;
-            applyMoveResult(moveNode, flipResult, capturedPiece);
+            moveAnimations.removeFirst();
+            applyMoveResult(moveNode, request.flipResult(), request.capturedPiece());
+            playNextMoveAnimation();
         });
         moveTransition.play();
     }
 
     public boolean isMoveAnimationRunning() {
-        return moveTransition != null;
+        return moveTransition != null || !moveAnimations.isEmpty();
     }
 
     public void cancelMoveAnimation() {
+        moveAnimations.clear();
         if (moveTransition == null) {
             return;
         }
@@ -512,6 +529,9 @@ public class GameView extends Pane {
             node.setTranslateY(0);
         }
         moveTransition = null;
+    }
+
+    private record MoveAnimation(JsonNode moveNode, String flipResult, String capturedPiece) {
     }
 
     public boolean applyReplayMoveResult(JsonNode moveNode, String flipResult) {
