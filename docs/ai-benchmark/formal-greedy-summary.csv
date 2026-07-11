@@ -1,2 +1,2 @@
 agent,opponent,totalGames,wins,losses,draws,winRate,averagePlies,seedCount
-expecti,greedy,400,357,17,26,0.8925,43.87,5
+expecti,greedy,400,353,18,29,0.8825,45.40,5

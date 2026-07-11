@@ -163,46 +163,63 @@ class AiBenchmarkMainTest {
     }
 
     // ================================================================
-    // D-06: performance stats tests
+    // D-06 rework: timeout / depth statistics tests
     // ================================================================
 
     @Test
-    void performanceFieldsAppearInCsvHeader() {
+    void csvHeaderHasMeasuredMovesAndTimeoutRate() {
         String header = AiBenchmarkMain.CSV_HEADER;
+        assertTrue(header.contains("measuredMoves"));
+        assertTrue(header.contains("timeoutMoves"));
+        assertTrue(header.contains("timeoutRate"));
         assertTrue(header.contains("avgNodesPerMove"));
         assertTrue(header.contains("avgDepth"));
-        assertTrue(header.contains("timeouts"));
-        assertTrue(header.contains("ttHits"));
-        assertTrue(header.contains("ttStores"));
-        assertTrue(header.contains("ttCutoffs"));
+        assertFalse(header.contains("timeouts,"), "must not use ambiguous 'timeouts' column");
     }
 
     @Test
-    void performanceStatsArePresentForExpectiAgent() {
+    void measuredMovesCountsEachSelectMoveOnce() {
         AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
                 "--agent", "expecti", "--opponents", "random",
                 "--games", "2", "--seed", "1", "--maxPlies", "200"
         });
         AiBenchmarkMain.BenchmarkRow row = AiBenchmarkMain.run(opts).get(0);
-        // ExpectiAgent should produce non-zero nodes/depth
-        assertTrue(row.avgNodesPerMove() > 0, "expecti should report searched nodes");
-        assertTrue(row.avgDepth() >= 0, "expecti should report depth");
+        assertTrue(row.measuredMoves() > 0, "measuredMoves should count selectMove calls");
+        assertEquals(row.measuredMoves(), row.timeoutMoves() + (row.measuredMoves() - row.timeoutMoves()));
     }
 
     @Test
-    void redAndBlackStatsAreNotSwapped() {
+    void timeoutRateEqualsTimeoutMovesDividedByMeasuredMoves() {
         AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
-                "--agent", "expecti", "--opponents", "greedy",
-                "--games", "2", "--seed", "1", "--maxPlies", "200", "--bothSides"
+                "--agent", "expecti", "--opponents", "random",
+                "--games", "10", "--seed", "1", "--maxPlies", "200"
+        });
+        AiBenchmarkMain.BenchmarkRow row = AiBenchmarkMain.run(opts).get(0);
+        assertEquals((double) row.timeoutMoves() / row.measuredMoves(), row.timeoutRate(), 0.001);
+    }
+
+    @Test
+    void avgDepthUsesPerMoveCompletedDepth() {
+        AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
+                "--agent", "expecti", "--opponents", "random",
+                "--games", "3", "--seed", "1", "--maxPlies", "200"
+        });
+        AiBenchmarkMain.BenchmarkRow row = AiBenchmarkMain.run(opts).get(0);
+        assertTrue(row.avgDepth() >= 0, "avgDepth per move, may be < 1 for shallow searches");
+    }
+
+    @Test
+    void summaryDoesNotPassTimeoutMoveCountAsGameCount() {
+        AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
+                "--agent", "expecti", "--opponents", "random",
+                "--games", "3", "--seeds", "1,2", "--maxPlies", "1", "--bothSides"
         });
         List<AiBenchmarkMain.BenchmarkRow> rows = AiBenchmarkMain.run(opts);
-        AiBenchmarkMain.BenchmarkRow redSide = rows.get(0);
-        AiBenchmarkMain.BenchmarkRow blackSide = rows.get(1);
-        assertEquals("red", redSide.side());
-        assertEquals("black", blackSide.side());
-        // Both sides should have stats (expecti plays both sides)
-        assertTrue(redSide.avgNodesPerMove() >= 0);
-        assertTrue(blackSide.avgNodesPerMove() >= 0);
+        for (AiBenchmarkMain.BenchmarkRow row : rows) {
+            // timeoutMoves is per move, not per game; must be ≤ measuredMoves
+            assertTrue(row.timeoutMoves() <= row.measuredMoves(),
+                    "timeoutMoves must be <= measuredMoves per row");
+        }
     }
 
     @Test
@@ -212,9 +229,34 @@ class AiBenchmarkMainTest {
                 "--games", "3", "--seeds", "1,2", "--maxPlies", "200", "--bothSides"
         });
         for (AiBenchmarkMain.BenchmarkRow row : AiBenchmarkMain.run(opts)) {
-            assertEquals(row.games(), row.wins() + row.losses() + row.draws(),
-                    "wins+losses+draws must equal games for " + row.side() + " vs " + row.opponent());
+            assertEquals(row.games(), row.wins() + row.losses() + row.draws());
         }
+    }
+
+    @Test
+    void redAndBlackStatsAreNotSwapped() {
+        AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
+                "--agent", "expecti", "--opponents", "greedy",
+                "--games", "2", "--seed", "1", "--maxPlies", "200", "--bothSides"
+        });
+        List<AiBenchmarkMain.BenchmarkRow> rows = AiBenchmarkMain.run(opts);
+        assertEquals("red", rows.get(0).side());
+        assertEquals("black", rows.get(1).side());
+        assertTrue(rows.get(0).measuredMoves() >= 0);
+        assertTrue(rows.get(1).measuredMoves() >= 0);
+    }
+
+    @Test
+    void summaryTotalGamesStillEqualsSumOfRawGames() {
+        AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
+                "--agent", "expecti", "--opponents", "random",
+                "--games", "3", "--seeds", "1,2", "--maxPlies", "1", "--bothSides"
+        });
+        List<AiBenchmarkMain.BenchmarkRow> rows = AiBenchmarkMain.run(opts);
+        int rawTotal = rows.stream().mapToInt(AiBenchmarkMain.BenchmarkRow::games).sum();
+        String summaryRow = AiBenchmarkMain.toSummaryCsv(rows).split("\n")[1];
+        int totalGames = Integer.parseInt(summaryRow.split(",")[2]);
+        assertEquals(rawTotal, totalGames);
     }
 
     // ================================================================

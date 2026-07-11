@@ -24,7 +24,7 @@ public final class AiBenchmarkMain {
 
     static final String CSV_HEADER =
             "agent,opponent,side,games,wins,losses,draws,winRate,averagePlies,seed,maxPlies,"
-                    + "avgNodesPerMove,avgDepth,timeouts,ttHits,ttStores,ttCutoffs";
+                    + "measuredMoves,timeoutMoves,timeoutRate,avgNodesPerMove,avgDepth,ttHits,ttStores,ttCutoffs";
 
     static final String SUMMARY_HEADER =
             "agent,opponent,totalGames,wins,losses,draws,winRate,averagePlies,seedCount";
@@ -80,9 +80,9 @@ public final class AiBenchmarkMain {
         Random rng = new Random(seed);
         int redWins = 0, blackWins = 0, draws = 0, totalPlies = 0;
 
-        // 累积 agent 侧的性能统计
+        // 累积 agent 侧的性能统计（逐 move）
         long totalNodes = 0, ttHits = 0, ttStores = 0, ttCutoffs = 0;
-        int totalDepth = 0, timeouts = 0, totalStatsMoves = 0;
+        int totalDepth = 0, measuredMoves = 0, timeoutMoves = 0;
 
         for (int i = 0; i < games; i++) {
             // 创建 agent（不修改 C 的 createAgent）
@@ -103,30 +103,31 @@ public final class AiBenchmarkMain {
                 case DRAW -> draws++;
             }
 
-            // 聚合一局的 stats（每局多次 move 的累计值）
+            // 聚合一局的 stats（逐 move 累计）
             totalNodes += capture.totalNodes;
             totalDepth += capture.totalDepth;
-            if (capture.timedOut) timeouts++;
+            timeoutMoves += capture.timeoutMoves;
             ttHits += capture.ttHits;
             ttStores += capture.ttStores;
             ttCutoffs += capture.ttCutoffs;
-            totalStatsMoves += capture.sampleCount; // 该局 agent 的 move 数
+            measuredMoves += capture.sampleCount;
         }
 
         int agentWins = agentIsRed ? redWins : blackWins;
         int agentLosses = agentIsRed ? blackWins : redWins;
         double winRate = games == 0 ? 0.0 : (double) agentWins / games;
         double avgPlies = games == 0 ? 0.0 : (double) totalPlies / games;
-        // avgNodesPerMove = 总搜索节点 / 总 move 数（非游戏数）
-        double avgNodes = totalStatsMoves == 0 ? 0.0 : (double) totalNodes / totalStatsMoves;
-        double avgDepth = totalStatsMoves == 0 ? 0.0 : (double) totalDepth / totalStatsMoves;
+        double avgNodes = measuredMoves == 0 ? 0.0 : (double) totalNodes / measuredMoves;
+        double avgDepth = measuredMoves == 0 ? 0.0 : (double) totalDepth / measuredMoves;
+        double timeoutRate = measuredMoves == 0 ? 0.0 : (double) timeoutMoves / measuredMoves;
 
         return new BenchmarkRow(agentName, opponentName, side, games,
                 agentWins, agentLosses, draws, winRate, avgPlies, seed, maxPlies,
-                avgNodes, avgDepth, timeouts, ttHits, ttStores, ttCutoffs);
+                measuredMoves, timeoutMoves, timeoutRate,
+                avgNodes, avgDepth, ttHits, ttStores, ttCutoffs);
     }
 
-    /** 包装 Agent：selectMove 后用 instanceof ExpectiAgent 收集 lastStats */
+    /** 包装 Agent：selectMove 后逐次收集 SearchStats，每次 move 独立计数 */
     private static Agent statsWrapper(Agent delegate, StatsCapture capture) {
         return new Agent() {
             @Override
@@ -136,7 +137,7 @@ public final class AiBenchmarkMain {
                     SearchStats s = ea.lastStats();
                     capture.totalNodes += s.searchedNodes();
                     capture.totalDepth += s.completedDepth();
-                    if (s.timedOut()) capture.timedOut = true;
+                    if (s.timedOut()) capture.timeoutMoves++;
                     capture.ttHits += s.ttHits();
                     capture.ttStores += s.ttStores();
                     capture.ttCutoffs += s.ttCutoffs();
@@ -150,7 +151,7 @@ public final class AiBenchmarkMain {
     private static final class StatsCapture {
         long totalNodes, ttHits, ttStores, ttCutoffs;
         int totalDepth, sampleCount;
-        boolean timedOut;
+        int timeoutMoves;  // 逐 move 统计的超时次数
     }
 
     // ================================================================
@@ -286,14 +287,16 @@ public final class AiBenchmarkMain {
             String agent, String opponent, String side,
             int games, int wins, int losses, int draws,
             double winRate, double averagePlies, long seed, int maxPlies,
-            double avgNodesPerMove, double avgDepth, int timeouts,
+            int measuredMoves, int timeoutMoves, double timeoutRate,
+            double avgNodesPerMove, double avgDepth,
             long ttHits, long ttStores, long ttCutoffs) {
 
         public BenchmarkRow {
             Objects.requireNonNull(agent); Objects.requireNonNull(opponent); Objects.requireNonNull(side);
             if (!"red".equals(side) && !"black".equals(side))
                 throw new IllegalArgumentException("side: " + side);
-            if (games < 0 || wins < 0 || losses < 0 || draws < 0 || maxPlies < 0)
+            if (games < 0 || wins < 0 || losses < 0 || draws < 0 || maxPlies < 0
+                    || measuredMoves < 0 || timeoutMoves < 0)
                 throw new IllegalArgumentException("negative field");
             if (wins + losses + draws != games)
                 throw new IllegalArgumentException("counts != games");
@@ -305,7 +308,8 @@ public final class AiBenchmarkMain {
                     str(games), str(wins), str(losses), str(draws),
                     fmt4(winRate), fmt2(averagePlies),
                     str(seed), str(maxPlies),
-                    fmt2(avgNodesPerMove), fmt2(avgDepth), str(timeouts),
+                    str(measuredMoves), str(timeoutMoves), fmt4(timeoutRate),
+                    fmt2(avgNodesPerMove), fmt2(avgDepth),
                     str(ttHits), str(ttStores), str(ttCutoffs));
         }
     }
