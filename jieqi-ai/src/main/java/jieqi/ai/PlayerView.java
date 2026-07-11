@@ -23,14 +23,20 @@ public final class PlayerView {
 
     private final BoardSnapshot informationBoard;
     private final Color sideToMove;
+    private final BeliefState beliefState;
 
-    private PlayerView(BoardSnapshot informationBoard, Color sideToMove) {
+    private PlayerView(BoardSnapshot informationBoard, Color sideToMove, BeliefState beliefState) {
         this.informationBoard = Objects.requireNonNull(informationBoard, "informationBoard");
         this.sideToMove = Objects.requireNonNull(sideToMove, "sideToMove");
+        this.beliefState = Objects.requireNonNull(beliefState, "beliefState").copy();
     }
 
     public static PlayerView of(BoardSnapshot informationBoard, Color sideToMove) {
-        return new PlayerView(informationBoard, sideToMove);
+        return new PlayerView(informationBoard, sideToMove, BeliefState.initial());
+    }
+
+    static PlayerView of(BoardSnapshot informationBoard, Color sideToMove, BeliefState beliefState) {
+        return new PlayerView(informationBoard, sideToMove, beliefState);
     }
 
     public PlayerView apply(MoveResultMessage moveResult) {
@@ -38,12 +44,30 @@ public final class PlayerView {
         if (!moveResult.valid()) {
             return this;
         }
+        Move move = moveResult.move();
+        CellState source = informationBoard.cellAt(move.from());
+        CellState target = informationBoard.cellAt(move.to());
+        BeliefState nextBelief = beliefState.copy();
+        if (source instanceof CellState.Hidden hiddenSource && moveResult.flipResult().isPresent()) {
+            nextBelief.recordKnownReveal(hiddenSource.color(), moveResult.flipResult().orElseThrow());
+        }
+        if (target instanceof CellState.Hidden hiddenTarget) {
+            switch (moveResult.capturedPiece().kind()) {
+                case KNOWN -> nextBelief.recordKnownReveal(
+                        hiddenTarget.color(),
+                        moveResult.capturedPiece().knownType().orElseThrow());
+                case UNKNOWN -> nextBelief.recordUnknownRemoval(hiddenTarget.color());
+                case NONE -> {
+                    // No pool update; kept tolerant for protocol messages that omit hidden capture detail.
+                }
+            }
+        }
         PieceType flipAs = moveResult.isFlip()
                 ? moveResult.flipResult().orElseThrow(
                 () -> new IllegalArgumentException("valid flip moveResult missing flipResult"))
                 : null;
-        BoardSnapshot next = informationBoard.apply(moveResult.move().from(), moveResult.move().to(), flipAs);
-        return new PlayerView(next, sideToMove.opposite());
+        BoardSnapshot next = informationBoard.apply(move.from(), move.to(), flipAs);
+        return new PlayerView(next, sideToMove.opposite(), nextBelief);
     }
 
     public Color sideToMove() {
@@ -56,6 +80,10 @@ public final class PlayerView {
 
     BoardSnapshot informationBoard() {
         return informationBoard;
+    }
+
+    BeliefState beliefState() {
+        return beliefState.copy();
     }
 
     public boolean isOccupied(Coord coord) {
