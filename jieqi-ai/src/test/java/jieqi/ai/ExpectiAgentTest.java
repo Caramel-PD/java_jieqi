@@ -289,6 +289,19 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void quiescenceSearchesQuietMovesThatResolveImmediateKingThreat() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4r4/4K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        int score = agent.quiescenceScoreForTesting(view);
+
+        assertTrue(agent.lastStats().quiescenceNodes() > 1);
+        assertTrue(score > -EvalWeights.KING_VALUE * 100);
+    }
+
+    @Test
     void quiescenceDepthIsBounded() {
         PlayerView view = viewOf("""
                 4k4/9/9/9/r1r1r1r2/9/R1R1R1R2/9/9/4K4 r
@@ -375,6 +388,20 @@ class ExpectiAgentTest {
 
         assertTrue(selected.isPresent());
         assertTrue(view.legalMoves().contains(selected.orElseThrow()));
+    }
+
+    @Test
+    void repeatedFixedPositionIsDeterministic() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/p8/X3P4/9/4P4/R3K4 r
+                """);
+
+        Optional<Move> first = new ExpectiAgent().selectMove(view, TimeBudget.ofMillis(200));
+        Optional<Move> second = new ExpectiAgent().selectMove(view, TimeBudget.ofMillis(200));
+
+        assertEquals(first, second);
+        assertTrue(first.isPresent());
+        assertTrue(view.legalMoves().contains(first.orElseThrow()));
     }
 
     @Test
