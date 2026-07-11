@@ -23,6 +23,15 @@ public final class MoveOrderer {
     private static final int HIDDEN_MOVE_BONUS = 1_000_000;
 
     public List<Move> order(BoardSnapshot board, Color side, List<Move> legalMoves, BeliefState belief) {
+        return order(board, side, legalMoves, belief, null);
+    }
+
+    public List<Move> order(
+            BoardSnapshot board,
+            Color side,
+            List<Move> legalMoves,
+            BeliefState belief,
+            Move priorityMove) {
         Objects.requireNonNull(board, "board");
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(legalMoves, "legalMoves");
@@ -35,6 +44,13 @@ public final class MoveOrderer {
                 .thenComparingInt(move -> move.from().rank())
                 .thenComparingInt(move -> move.to().file())
                 .thenComparingInt(move -> move.to().rank()));
+        if (priorityMove != null) {
+            int index = ordered.indexOf(priorityMove);
+            if (index > 0) {
+                ordered.remove(index);
+                ordered.add(0, priorityMove);
+            }
+        }
         return ordered;
     }
 

@@ -90,6 +90,28 @@ class MoveOrdererTest {
         assertEquals(first, second);
     }
 
+    @Test
+    void ttBestMoveIsOrderedFirst() {
+        BoardText.ParsedPosition position = BoardText.parse("""
+                4k4/9/9/9/9/9/9/9/4P4/R3K4 r
+                """);
+        BoardSnapshot board = position.board();
+        List<Move> legalMoves = RuleEngine.generateLegalMoves(board, position.sideToMove());
+        Move ttBestMove = Move.parse("a0a1");
+
+        List<Move> ordered = orderer.order(
+                board,
+                position.sideToMove(),
+                legalMoves,
+                BeliefState.initial(),
+                ttBestMove);
+
+        assertTrue(legalMoves.contains(ttBestMove));
+        assertEquals(ttBestMove, ordered.get(0));
+        assertEquals(legalMoves.size(), ordered.size());
+        assertEquals(new HashSet<>(legalMoves), new HashSet<>(ordered));
+    }
+
     private List<Move> ordered(BoardText.ParsedPosition position) {
         return orderer.order(
                 position.board(),
