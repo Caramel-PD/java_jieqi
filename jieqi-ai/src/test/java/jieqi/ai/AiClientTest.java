@@ -81,6 +81,50 @@ class AiClientTest {
     }
 
     @Test
+    void pveStartMatchJsonIncludesModeAndAiClientType() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(
+                configWithMode("pve"),
+                new FixedAgent(Optional.empty()),
+                outbound::add);
+
+        client.sendStartMatch();
+
+        JsonObject json = Json.parseObject(outbound.get(0));
+        assertEquals("startMatch", Json.optString(json, "messageType", null));
+        assertEquals("pve", Json.optString(json, "mode", null));
+        assertEquals("ai", Json.optString(json, "clientType", null));
+    }
+
+    @Test
+    void aiVsAiStartMatchJsonIncludesModeAndAiClientType() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(
+                configWithMode("aivai"),
+                new FixedAgent(Optional.empty()),
+                outbound::add);
+
+        client.sendStartMatch();
+
+        JsonObject json = Json.parseObject(outbound.get(0));
+        assertEquals("startMatch", Json.optString(json, "messageType", null));
+        assertEquals("aivai", Json.optString(json, "mode", null));
+        assertEquals("ai", Json.optString(json, "clientType", null));
+    }
+
+    @Test
+    void aiClientNeverSendsPvpAiStartMatch() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), outbound::add);
+
+        client.sendStartMatch();
+
+        JsonObject json = Json.parseObject(outbound.get(0));
+        assertEquals("ai", Json.optString(json, "clientType", null));
+        assertFalse("pvp".equals(Json.optString(json, "mode", null)));
+    }
+
+    @Test
     void loginSuccessStartsMatchAndMatchSuccessSendsReady() {
         List<String> outbound = new ArrayList<>();
         AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), outbound::add);
@@ -181,6 +225,17 @@ class AiClientTest {
 
     private static String messageType(String json) {
         return Json.optString(Json.parseObject(json), "messageType", null);
+    }
+
+    private static AiClientConfig configWithMode(String mode) {
+        return new AiClientConfig(
+                AiClientConfig.DEFAULT_SERVER_URL,
+                AiClientConfig.DEFAULT_USER_ID,
+                AiClientConfig.DEFAULT_PASSWORD,
+                AiClientConfig.DEFAULT_NICKNAME,
+                AiClientConfig.DEFAULT_THINK_TIME_MILLIS,
+                false,
+                mode);
     }
 
     private static void assertNoServerTypes(Class<?> type) {

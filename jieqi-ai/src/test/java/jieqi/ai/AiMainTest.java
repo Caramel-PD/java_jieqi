@@ -25,6 +25,7 @@ class AiMainTest {
         assertEquals("AI", options.config().nickname());
         assertEquals(10_000L, options.config().thinkTimeMillis());
         assertFalse(options.config().registerOnConnect());
+        assertEquals("pve", options.config().mode());
         assertEquals("greedy", options.agentType());
     }
 
@@ -37,6 +38,7 @@ class AiMainTest {
                 "--nickname", "AIPlayer",
                 "--agent", "random",
                 "--thinkTimeMillis", "250",
+                "--mode", "aivai",
                 "--register"
         });
 
@@ -46,7 +48,27 @@ class AiMainTest {
         assertEquals("AIPlayer", options.config().nickname());
         assertEquals(250L, options.config().thinkTimeMillis());
         assertTrue(options.config().registerOnConnect());
+        assertEquals("aivai", options.config().mode());
         assertEquals("random", options.agentType());
+    }
+
+    @Test
+    void parsesPveMatchMode() {
+        AiMain.CliOptions options = AiMain.parseArgs(new String[] {"--mode", "pve"});
+
+        assertEquals("pve", options.config().mode());
+    }
+
+    @Test
+    void parsesAiVsAiMatchMode() {
+        AiMain.CliOptions options = AiMain.parseArgs(new String[] {"--mode", "aivai"});
+
+        assertEquals("aivai", options.config().mode());
+    }
+
+    @Test
+    void rejectsInvalidMatchModeBeforeConnecting() {
+        assertThrows(IllegalArgumentException.class, () -> AiMain.parseArgs(new String[] {"--mode", "pvp"}));
     }
 
     @Test
@@ -77,8 +99,10 @@ class AiMainTest {
         String help = out.toString(StandardCharsets.UTF_8);
         assertTrue(help.contains("java -jar jieqi-ai/target/jieqi-ai.jar"));
         assertTrue(help.contains("--agent random|greedy|tactical|expecti"));
-        assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --register"));
-        assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --register"));
+        assertTrue(help.contains("--mode pve|aivai"));
+        assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --mode aivai --register"));
+        assertTrue(help.contains("--serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --mode aivai --register"));
         assertTrue(help.contains("agent = greedy"));
+        assertTrue(help.contains("mode = pve"));
     }
 }

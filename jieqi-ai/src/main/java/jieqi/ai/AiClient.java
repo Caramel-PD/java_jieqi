@@ -77,7 +77,10 @@ public final class AiClient {
     }
 
     public void sendStartMatch() {
-        send(base("startMatch"));
+        JsonObject json = base("startMatch");
+        json.addProperty("mode", config.mode());
+        json.addProperty("clientType", "ai");
+        send(json);
     }
 
     public void sendReady() {

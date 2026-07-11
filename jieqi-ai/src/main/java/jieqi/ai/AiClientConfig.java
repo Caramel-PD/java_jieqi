@@ -1,6 +1,7 @@
 package jieqi.ai;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -12,13 +13,15 @@ public record AiClientConfig(
         String password,
         String nickname,
         long thinkTimeMillis,
-        boolean registerOnConnect) {
+        boolean registerOnConnect,
+        String mode) {
 
     public static final URI DEFAULT_SERVER_URL = URI.create("ws://localhost:8887");
     public static final String DEFAULT_USER_ID = "ai";
     public static final String DEFAULT_PASSWORD = "ai";
     public static final String DEFAULT_NICKNAME = "AI";
     public static final long DEFAULT_THINK_TIME_MILLIS = 10_000L;
+    public static final String DEFAULT_MODE = "pve";
 
     public AiClientConfig(
             URI serverUrl,
@@ -26,7 +29,17 @@ public record AiClientConfig(
             String password,
             String nickname,
             long thinkTimeMillis) {
-        this(serverUrl, userId, password, nickname, thinkTimeMillis, false);
+        this(serverUrl, userId, password, nickname, thinkTimeMillis, false, DEFAULT_MODE);
+    }
+
+    public AiClientConfig(
+            URI serverUrl,
+            String userId,
+            String password,
+            String nickname,
+            long thinkTimeMillis,
+            boolean registerOnConnect) {
+        this(serverUrl, userId, password, nickname, thinkTimeMillis, registerOnConnect, DEFAULT_MODE);
     }
 
     public AiClientConfig {
@@ -34,6 +47,7 @@ public record AiClientConfig(
         userId = requireNonBlank(userId, "userId");
         password = requireNonBlank(password, "password");
         nickname = requireNonBlank(nickname, "nickname");
+        mode = normalizeMode(mode);
         if (thinkTimeMillis < 0) {
             throw new IllegalArgumentException("thinkTimeMillis must be >= 0");
         }
@@ -46,7 +60,8 @@ public record AiClientConfig(
                 DEFAULT_PASSWORD,
                 DEFAULT_NICKNAME,
                 DEFAULT_THINK_TIME_MILLIS,
-                false);
+                false,
+                DEFAULT_MODE);
     }
 
     private static String requireNonBlank(String value, String name) {
@@ -55,5 +70,13 @@ public record AiClientConfig(
             throw new IllegalArgumentException(name + " must not be blank");
         }
         return value;
+    }
+
+    private static String normalizeMode(String value) {
+        String normalized = requireNonBlank(value, "mode").toLowerCase(Locale.ROOT);
+        if (!"pve".equals(normalized) && !"aivai".equals(normalized)) {
+            throw new IllegalArgumentException("mode must be pve or aivai: " + value);
+        }
+        return normalized;
     }
 }
