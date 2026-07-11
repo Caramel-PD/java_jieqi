@@ -92,6 +92,7 @@ public class Main extends Application {
         statusBar.reset();
 
         wsClient.setOnConnectErrorCallback(msg -> onConnectFailed(msg));
+        wsClient.setOnDisconnectedCallback(this::onDisconnected);
         wsClient.setOnOpenCallback(() -> {
             wsClient.send(authMessage.get());
         });
@@ -117,6 +118,22 @@ public class Main extends Application {
     private void onConnectFailed(String message) {
         if (pendingAuthForm != null) {
             onAuthFailed(message);
+        }
+    }
+
+    private void onDisconnected(String message) {
+        autoStartMatchAfterLogin = false;
+        musicPlayer.stop();
+        pendingAuthForm = null;
+        if (controller != null) {
+            controller.handleDisconnected();
+            controller = null;
+        }
+        wsClient = null;
+        board.setController(null);
+        statusBar.reset();
+        if (entryDialog != null) {
+            entryDialog.showWithMessage("与服务器的连接已断开，请重新登录。\n" + message);
         }
     }
 

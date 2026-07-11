@@ -75,7 +75,7 @@ public class GameController {
             app.pendingMove = false;
             app.isMyTurn = !app.isMyTurn;
             applyRuleMove(moveNode, flipResult);
-            app.board.applyMoveResult(moveNode, flipResult, captured);
+            app.board.applyMoveResultAnimated(moveNode, flipResult, captured);
             recordCapture(moverIsMe, captured);
             app.resetTurnTimer();
             app.refreshStatusBar();
@@ -130,7 +130,7 @@ public class GameController {
     }
 
     public void sendMove(String fromX, int fromY, String toX, int toY, boolean isFlip) {
-        if (!app.isMyTurn || app.pendingMove) {
+        if (!app.isMyTurn || app.pendingMove || app.board.isMoveAnimationRunning()) {
             app.showError("无法走子", app.pendingMove ? "请等待服务器响应" : "还没轮到我方");
             return;
         }
@@ -148,7 +148,7 @@ public class GameController {
     }
 
     public boolean isMyTurn() {
-        return app.isMyTurn && !app.gameOver && !app.pendingMove;
+        return app.isMyTurn && !app.gameOver && !app.pendingMove && !app.board.isMoveAnimationRunning();
     }
 
     public boolean isMyPiece(boolean red) {

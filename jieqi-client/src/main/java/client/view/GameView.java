@@ -8,6 +8,7 @@ import javafx.animation.FadeTransition;
 import javafx.animation.ParallelTransition;
 import javafx.animation.RotateTransition;
 import javafx.animation.ScaleTransition;
+import javafx.animation.TranslateTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.Rectangle2D;
@@ -83,6 +84,7 @@ public class GameView extends Pane {
     private GameController controller;
     private boolean gameOver = false;
     private boolean flipped = false;
+    private TranslateTransition moveTransition;
 
     public GameView(GameController controller) {
         this.controller = controller;
@@ -470,6 +472,48 @@ public class GameView extends Pane {
         clearMoveHints();
     }
 
+    public void applyMoveResultAnimated(JsonNode moveNode, String flipResult, String capturedPiece) {
+        cancelMoveAnimation();
+        String fromKey = moveNode.path("fromX").asText() + moveNode.path("fromY").asInt();
+        ChessPiece moving = pieceMap.get(fromKey);
+        if (moving == null || !boardLayer.isVisible()) {
+            applyMoveResult(moveNode, flipResult, capturedPiece);
+            return;
+        }
+
+        int toFile = moveNode.path("toX").asText().charAt(0) - 'a';
+        int toRank = moveNode.path("toY").asInt();
+        double targetX = cellCenterX(toFile) - 45;
+        double targetY = cellCenterY(toRank) - 45;
+        moveTransition = new TranslateTransition(Duration.millis(320), moving);
+        moveTransition.setByX(targetX - moving.getLayoutX());
+        moveTransition.setByY(targetY - moving.getLayoutY());
+        moveTransition.setOnFinished(event -> {
+            moving.setTranslateX(0);
+            moving.setTranslateY(0);
+            moveTransition = null;
+            applyMoveResult(moveNode, flipResult, capturedPiece);
+        });
+        moveTransition.play();
+    }
+
+    public boolean isMoveAnimationRunning() {
+        return moveTransition != null;
+    }
+
+    public void cancelMoveAnimation() {
+        if (moveTransition == null) {
+            return;
+        }
+        var node = moveTransition.getNode();
+        moveTransition.stop();
+        if (node != null) {
+            node.setTranslateX(0);
+            node.setTranslateY(0);
+        }
+        moveTransition = null;
+    }
+
     public boolean applyReplayMoveResult(JsonNode moveNode, String flipResult) {
         String fromX = moveNode.get("fromX").asText();
         int fromY = moveNode.get("fromY").asInt();
@@ -527,6 +571,7 @@ public class GameView extends Pane {
     }
 
     private void clearPieces() {
+        cancelMoveAnimation();
         boardLayer.getChildren().removeIf(node -> node instanceof ChessPiece);
         pieceMap.clear();
         clearSelection();

@@ -1,5 +1,6 @@
 package client.network;
 
+import javafx.application.Platform;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.slf4j.Logger;
@@ -11,8 +12,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-import javafx.application.Platform;
-
 public class WsClient {
     private static final Logger LOG = LoggerFactory.getLogger(WsClient.class);
     private WebSocketClient client;
@@ -20,8 +19,11 @@ public class WsClient {
     private Consumer<String> messageHandler;
     private Runnable onOpenCallback;
     private Consumer<String> onConnectErrorCallback;
+    private Consumer<String> onDisconnectedCallback;
     private ScheduledExecutorService pingScheduler;
     private volatile boolean opened;
+    private volatile boolean intentionalClose;
+    private volatile boolean terminalEventDelivered;
 
     public WsClient(String serverUrl) {
         this.serverUrl = serverUrl;
@@ -39,13 +41,19 @@ public class WsClient {
         this.onConnectErrorCallback = callback;
     }
 
+    public void setOnDisconnectedCallback(Consumer<String> callback) {
+        this.onDisconnectedCallback = callback;
+    }
+
     public void connect() {
         opened = false;
+        intentionalClose = false;
+        terminalEventDelivered = false;
         try {
             client = new WebSocketClient(new URI(serverUrl)) {
                 @Override
                 public void onOpen(ServerHandshake handshake) {
-                    LOG.info("WebSocket 连接成功");
+                    LOG.info("WebSocket connected");
                     opened = true;
                     startPing();
                     if (onOpenCallback != null) {
@@ -55,7 +63,7 @@ public class WsClient {
 
                 @Override
                 public void onMessage(String message) {
-                    LOG.info("收到: {}", message);
+                    LOG.info("Received: {}", message);
                     if (messageHandler != null) {
                         messageHandler.accept(message);
                     }
@@ -63,31 +71,38 @@ public class WsClient {
 
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
-                    LOG.info("连接关闭: code={}, reason={}", code, reason);
+                    LOG.info("Connection closed: code={}, reason={}", code, reason);
                     stopPing();
-                    if (!opened && onConnectErrorCallback != null) {
-                        String msg = reason == null || reason.isBlank()
-                                ? "无法连接服务�?(code " + code + ")"
-                                : reason;
-                        Platform.runLater(() -> onConnectErrorCallback.accept(msg));
-                    }
+                    boolean wasOpened = opened;
+                    opened = false;
+                    String message = reason == null || reason.isBlank()
+                            ? "Connection closed (code " + code + ")"
+                            : reason;
+                    deliverTerminalEvent(wasOpened, message);
                 }
 
                 @Override
                 public void onError(Exception ex) {
-                    LOG.error("WebSocket错误", ex);
-                    if (onConnectErrorCallback != null) {
-                        String msg = ex.getMessage() == null ? "连接服务器失败" : ex.getMessage();
-                        Platform.runLater(() -> onConnectErrorCallback.accept(msg));
-                    }
+                    LOG.error("WebSocket error", ex);
+                    String message = ex.getMessage() == null ? "Unable to connect to server" : ex.getMessage();
+                    deliverTerminalEvent(opened, message);
                 }
             };
             client.connect();
         } catch (Exception e) {
-            LOG.error("连接失败", e);
-            if (onConnectErrorCallback != null) {
-                Platform.runLater(() -> onConnectErrorCallback.accept("连接地址无效: " + e.getMessage()));
-            }
+            LOG.error("Connection failed", e);
+            deliverTerminalEvent(false, "Invalid server address: " + e.getMessage());
+        }
+    }
+
+    private synchronized void deliverTerminalEvent(boolean wasOpened, String message) {
+        if (intentionalClose || terminalEventDelivered) {
+            return;
+        }
+        terminalEventDelivered = true;
+        Consumer<String> callback = wasOpened ? onDisconnectedCallback : onConnectErrorCallback;
+        if (callback != null) {
+            Platform.runLater(() -> callback.accept(message));
         }
     }
 
@@ -98,7 +113,7 @@ public class WsClient {
                 if (client != null && client.isOpen()) {
                     send(MessageBuilder.buildPing());
                 }
-            }, 5, 10, TimeUnit.SECONDS); // �?0秒发送一�?ing
+            }, 5, 10, TimeUnit.SECONDS);
         }
     }
 
@@ -112,9 +127,9 @@ public class WsClient {
     public void send(String json) {
         if (client != null && client.isOpen()) {
             client.send(json);
-            LOG.debug("发�?? {}", json);
+            LOG.debug("Sent: {}", json);
         } else {
-            LOG.warn("连接尚未打开，无法发送");
+            LOG.warn("Connection is not open; message was not sent");
         }
     }
 
@@ -123,7 +138,11 @@ public class WsClient {
     }
 
     public void close() {
+        intentionalClose = true;
+        opened = false;
         stopPing();
-        if (client != null) client.close();
+        if (client != null) {
+            client.close();
+        }
     }
 }

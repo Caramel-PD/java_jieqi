@@ -178,7 +178,49 @@ public class ApplicationController {
     private void handleError(JsonNode root) {
         int code = root.path("code").asInt();
         String msg = root.path("message").asText();
-        Platform.runLater(() -> showError("服务器错误(code " + code + ")", msg));
+        Platform.runLater(() -> {
+            if (code == 4002 && phase == Phase.MATCHING) {
+                resetMatchingState();
+            }
+            showError("服务器错误 (code " + code + ")", msg);
+        });
+    }
+
+    private void resetMatchingState() {
+        phase = Phase.IDLE;
+        roomId = null;
+        opponentNickname = null;
+        opponentReady = false;
+        myReady = false;
+        firstHandChoiceMade = false;
+        matchSuccessPreview = false;
+        pendingMove = false;
+        board.setMatchingVisible(false);
+        refreshStatusBar();
+    }
+
+    public void handleDisconnected() {
+        stopTurnTimer();
+        stopReplayPlayback();
+        if (postGameTransition != null) {
+            postGameTransition.stop();
+            postGameTransition = null;
+        }
+        loggedIn = false;
+        gameOver = true;
+        myColor = null;
+        isMyTurn = false;
+        pendingMove = false;
+        ruleBoard = null;
+        phase = Phase.IDLE;
+        board.cancelMoveAnimation();
+        board.setBoardVisible(false);
+        board.setLobbyVisible(false);
+        board.setMatchingVisible(false);
+        board.setAiRecordsVisible(false);
+        board.setRoomWaitingVisible(false);
+        board.setPostGameActionsVisible(false);
+        board.updatePregameControls(false, false, false, false, false);
     }
 
     void showGameResultOverlay(String winner) {
