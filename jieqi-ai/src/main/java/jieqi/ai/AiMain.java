@@ -32,6 +32,7 @@ public final class AiMain {
         long thinkTimeMillis = AiClientConfig.DEFAULT_THINK_TIME_MILLIS;
         boolean registerOnConnect = false;
         String agentType = DEFAULT_AGENT_TYPE;
+        String mode = AiClientConfig.DEFAULT_MODE;
 
         for (int i = 0; i < args.length; i++) {
             String raw = args[i];
@@ -51,6 +52,7 @@ public final class AiMain {
                 case "nickname", "nick" -> nickname = argument.requireValue();
                 case "thinktimemillis", "think" -> thinkTimeMillis = Long.parseLong(argument.requireValue());
                 case "agent" -> agentType = argument.requireValue();
+                case "mode" -> mode = argument.requireValue();
                 case "register" -> registerOnConnect = argument.optionalBoolean(true);
                 case "login" -> registerOnConnect = !argument.optionalBoolean(true);
                 default -> throw new IllegalArgumentException("unknown option: --" + argument.name());
@@ -58,7 +60,7 @@ public final class AiMain {
         }
 
         return new CliOptions(
-                new AiClientConfig(serverUrl, userId, password, nickname, thinkTimeMillis, registerOnConnect),
+                new AiClientConfig(serverUrl, userId, password, nickname, thinkTimeMillis, registerOnConnect, mode),
                 agentType);
     }
 
@@ -82,16 +84,18 @@ public final class AiMain {
                   --password ai
                   --nickname AI
                   --agent random|greedy|tactical|expecti
+                  --mode pve|aivai
                   --thinkTimeMillis 10000
                   --register
 
                 Defaults:
                   serverUrl = ws://localhost:8887
                   agent = greedy
+                  mode = pve
 
                 Run two AI players against the same local server:
-                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --register
-                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --register
+                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai1 --password ai1 --nickname AI1 --mode aivai --register
+                  java -jar jieqi-ai/target/jieqi-ai.jar --serverUrl ws://localhost:8887 --userId ai2 --password ai2 --nickname AI2 --mode aivai --register
                 """;
     }
 
