@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -64,6 +65,8 @@ final class ProtocolServer {
     static final int ERROR_WRONG_TURN = 2002;
     /** 请求的已落盘棋谱不存在。 */
     static final int ERROR_RECORD_NOT_FOUND = 3001;
+    /** 匹配模式或客户端类型不符合协议约束。 */
+    static final int ERROR_INVALID_MATCH_MODE = 4002;
     private static final int DEFAULT_RECORD_LIMIT = 20;
     private static final int MAX_RECORD_LIMIT = 100;
 
@@ -77,8 +80,10 @@ final class ProtocolServer {
     private final Map<String, Core.Session> onlineUsers = new ConcurrentHashMap<>();
     /** 当前所有房间，包含未结束和已结束房间，便于调试查询。 */
     private final Map<String, GameRoom> rooms = new ConcurrentHashMap<>();
-    /** 匹配等待队列需要保序，因此用 Deque 并在访问时加 ProtocolServer 锁。 */
-    private final Deque<Core.Session> waiting = new ArrayDeque<>();
+    /** 不同模式和客户端类型使用独立 FIFO 队列，防止跨模式或同类型 PVE 误配。 */
+    private final Map<MatchQueueKey, Deque<Core.Session>> waitingQueues = new EnumMap<>(MatchQueueKey.class);
+    /** 反向记录会话所在队列，使取消、断线和重复请求都能做单点幂等清理。 */
+    private final Map<Core.Session, MatchQueueKey> waitingMembership = new ConcurrentHashMap<>();
     /** 房间编号单调递增，测试可稳定断言 room_1。 */
     private final AtomicInteger roomSequence = new AtomicInteger(1);
     /** 统一调度回合计时任务，房间内再用 synchronized 做状态保护。 */
@@ -109,6 +114,9 @@ final class ProtocolServer {
         this.config = Objects.requireNonNull(config, "config");
         this.accounts = Objects.requireNonNull(accounts, "accounts");
         this.gameRecords = new GameRecordRepository(config.recordsDir);
+        for (MatchQueueKey key : MatchQueueKey.values()) {
+            waitingQueues.put(key, new ArrayDeque<>());
+        }
         // 单线程调度器让超时回调顺序可预测；真正修改房间状态仍由 GameRoom 锁保护。
         this.scheduler = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
     }
@@ -142,7 +150,7 @@ final class ProtocolServer {
         }
         synchronized (this) {
             // 未开局前断线只清理等待队列，避免误判为对局中 disconnect 负。
-            waiting.remove(session);
+            removeFromWaitingQueue(session);
         }
         if (session.userId != null) {
             onlineUsers.remove(session.userId, session);
@@ -198,7 +206,7 @@ final class ProtocolServer {
             switch (type) {
                 case "login" -> handleLogin(session, json);
                 case "register" -> handleRegister(session, json);
-                case "startmatch" -> handleStartMatch(session);
+                case "startmatch" -> handleStartMatch(session, json);
                 case "cancelmatch" -> handleCancelMatch(session);
                 case "requestfirsthand" -> handleRequestFirstHand(session, json);
                 case "ready" -> handleReady(session);
@@ -225,6 +233,7 @@ final class ProtocolServer {
      * 处理登录消息。
      *
      * @param session 当前连接会话。
+     * @param json 匹配请求；旧格式无扩展字段时按 pvp/human 处理。
      * @param json 登录 JSON，包含 userId 和 password。
      * @throws RuntimeException 当账户存储读写异常未被底层吞掉时可能抛出。
      * @apiNote 使用示例：客户端发送 {@code {"messageType":"Login","userId":"u1","password":"p"}}。
@@ -281,20 +290,28 @@ final class ProtocolServer {
      * @throws RuntimeException 当前实现不主动抛出异常。
      * @apiNote 使用示例：客户端登录后发送 {@code {"messageType":"startMatch"}}。
      */
-    private void handleStartMatch(Core.Session session) {
+    private void handleStartMatch(Core.Session session, JsonObject json) {
         if (!requireLogin(session)) {
+            return;
+        }
+        MatchQueueKey requestedKey = parseMatchQueueKey(json);
+        if (requestedKey == null) {
+            session.send(Messages.error(ERROR_INVALID_MATCH_MODE, "invalid match mode"));
             return;
         }
         synchronized (this) {
             if (session.state == Core.SessionState.MATCHING || session.room != null) {
                 return;
             }
-            Core.Session opponent = pollWaitingOpponent(session);
+            MatchQueueKey opponentKey = requestedKey.opponentQueue();
+            Core.Session opponent = pollWaitingOpponent(opponentKey, session);
             if (opponent == null) {
-                // 只有认证用户会进入等待队列，serverStatus 的 waitingUsers 因此可直接读队列长度。
-                waiting.addLast(session);
+                // 会话和队列键同步登记，后续取消或断线无需猜测其匹配模式。
+                waitingQueues.get(requestedKey).addLast(session);
+                waitingMembership.put(session, requestedKey);
                 session.state = Core.SessionState.MATCHING;
-                System.out.println("player waiting for match: " + session.userId);
+                System.out.println("player waiting for match: userId=" + session.userId
+                        + ", mode=" + requestedKey.mode + ", clientType=" + requestedKey.clientType);
                 return;
             }
             // 队首玩家默认先成为红方，requestFirstHand 会在 gameStart 前按意愿调整。
@@ -319,20 +336,59 @@ final class ProtocolServer {
     /**
      * 从等待队列中取出一个可用对手。
      *
+     * @param queueKey 对手必须所在的模式队列。
      * @param session 当前请求匹配的玩家，不能匹配自己。
      * @return 可匹配的对手；没有时返回 null。
      * @throws RuntimeException 当前实现不主动抛出异常。
      * @apiNote 使用示例：仅在持有 {@code ProtocolServer} 锁时调用。
      */
-    private Core.Session pollWaitingOpponent(Core.Session session) {
-        while (!waiting.isEmpty()) {
-            Core.Session candidate = waiting.removeFirst();
+    private Core.Session pollWaitingOpponent(MatchQueueKey queueKey, Core.Session session) {
+        Deque<Core.Session> queue = waitingQueues.get(queueKey);
+        while (!queue.isEmpty()) {
+            Core.Session candidate = queue.removeFirst();
+            waitingMembership.remove(candidate);
             // 跳过已断线或异常残留的会话，避免把不可用连接放入房间。
-            if (candidate != session && candidate.channel.isOpen() && candidate.userId != null) {
+            if (candidate != session && candidate.channel.isOpen() && candidate.userId != null
+                    && candidate.state == Core.SessionState.MATCHING && candidate.room == null) {
                 return candidate;
             }
         }
         return null;
+    }
+
+    /**
+     * 解析 startMatch 的兼容格式并映射到唯一等待队列。
+     *
+     * @param json startMatch JSON。
+     * @return 合法队列键；字段缺失不对称、类型错误或组合非法时返回 null。
+     */
+    private MatchQueueKey parseMatchQueueKey(JsonObject json) {
+        boolean hasMode = json.has("mode");
+        boolean hasClientType = json.has("clientType");
+        if (!hasMode && !hasClientType) {
+            return MatchQueueKey.PVP_HUMAN;
+        }
+        // 只出现一个扩展字段时不能猜测另一个字段，否则客户端配置错误会被静默掩盖。
+        if (!hasMode || !hasClientType
+                || !json.get("mode").isJsonPrimitive() || !json.get("mode").getAsJsonPrimitive().isString()
+                || !json.get("clientType").isJsonPrimitive()
+                || !json.get("clientType").getAsJsonPrimitive().isString()) {
+            return null;
+        }
+        String mode = json.get("mode").getAsString().trim().toLowerCase(java.util.Locale.ROOT);
+        String clientType = json.get("clientType").getAsString().trim().toLowerCase(java.util.Locale.ROOT);
+        return MatchQueueKey.from(mode, clientType);
+    }
+
+    /**
+     * 从会话实际登记的队列中移除等待项。
+     *
+     * @param session 待清理会话。
+     * @return 是否从队列中移除了会话。
+     */
+    private boolean removeFromWaitingQueue(Core.Session session) {
+        MatchQueueKey key = waitingMembership.remove(session);
+        return key != null && waitingQueues.get(key).remove(session);
     }
 
     /**
@@ -353,7 +409,7 @@ final class ProtocolServer {
                 return;
             }
             // 只有仍在等待队列的会话才能取消匹配；状态回退让该用户可立即再次 startMatch。
-            boolean removed = waiting.remove(session);
+            boolean removed = removeFromWaitingQueue(session);
             session.state = Core.SessionState.AUTHED;
             System.out.println("cancel match: userId=" + session.userId + ", removedFromQueue=" + removed);
         }
@@ -481,14 +537,55 @@ final class ProtocolServer {
     private void handleServerStatus(Core.Session session) {
         int waitingUsers;
         synchronized (this) {
-            // waiting 是 ArrayDeque，读写都在同一把锁内，避免并发匹配时看到中间状态。
-            waitingUsers = waiting.size();
+            // 反向成员表每个 Session 只有一项，因此可直接得到所有模式队列的去重总人数。
+            waitingUsers = waitingMembership.size();
         }
         List<Messages.RoomStatus> roomStatuses = new ArrayList<>();
         for (GameRoom room : rooms.values()) {
             roomStatuses.add(room.status());
         }
         session.send(Messages.serverStatus(onlineUsers.size(), waitingUsers, roomStatuses));
+    }
+
+    /**
+     * 匹配等待队列键，封装允许的 mode/clientType 组合及其目标对手队列。
+     */
+    private enum MatchQueueKey {
+        PVP_HUMAN("pvp", "human"),
+        PVE_HUMAN("pve", "human"),
+        PVE_AI("pve", "ai"),
+        AIVAI_AI("aivai", "ai");
+
+        private final String mode;
+        private final String clientType;
+
+        MatchQueueKey(String mode, String clientType) {
+            this.mode = mode;
+            this.clientType = clientType;
+        }
+
+        /** @return 当前队列允许配对的对手队列。 */
+        MatchQueueKey opponentQueue() {
+            return switch (this) {
+                case PVE_HUMAN -> PVE_AI;
+                case PVE_AI -> PVE_HUMAN;
+                default -> this;
+            };
+        }
+
+        /**
+         * @param mode 已规范化模式。
+         * @param clientType 已规范化客户端类型。
+         * @return 对应合法队列；非法组合返回 null。
+         */
+        static MatchQueueKey from(String mode, String clientType) {
+            for (MatchQueueKey key : values()) {
+                if (key.mode.equals(mode) && key.clientType.equals(clientType)) {
+                    return key;
+                }
+            }
+            return null;
+        }
     }
 
     /**

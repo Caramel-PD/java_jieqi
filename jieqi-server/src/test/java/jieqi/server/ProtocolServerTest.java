@@ -1750,6 +1750,164 @@ class ProtocolServerTest {
         return new ProtocolServer(config);
     }
 
+    @Test
+    void legacyAndExplicitPvpHumanMatchNormally() {
+        ProtocolServer server = newServer();
+        FakeChannel first = loginClient(server, "mode_u1");
+        FakeChannel second = loginClient(server, "mode_u2");
+        first.clear();
+        second.clear();
+
+        server.onMessage(first, "{\"messageType\":\"startMatch\"}");
+        server.onMessage(second, matchRequest("PVP", "HUMAN"));
+
+        assertEquals(1, first.messagesOfType("matchSuccess").size());
+        assertEquals(1, second.messagesOfType("matchSuccess").size());
+    }
+
+    @Test
+    void pveOnlyPairsHumanWithAi() {
+        ProtocolServer server = newServer();
+        FakeChannel human1 = loginClient(server, "pve_h1");
+        FakeChannel human2 = loginClient(server, "pve_h2");
+        FakeChannel ai1 = loginClient(server, "pve_ai1");
+        FakeChannel ai2 = loginClient(server, "pve_ai2");
+        clearChannels(human1, human2, ai1, ai2);
+
+        server.onMessage(human1, matchRequest("pve", "human"));
+        server.onMessage(human2, matchRequest("pve", "human"));
+        server.onMessage(ai1, matchRequest("pve", "ai"));
+        assertEquals(1, human1.messagesOfType("matchSuccess").size());
+        assertEquals(0, human2.messagesOfType("matchSuccess").size());
+        assertEquals(1, ai1.messagesOfType("matchSuccess").size());
+
+        server.onMessage(ai2, matchRequest("pve", "ai"));
+        assertEquals(1, human2.messagesOfType("matchSuccess").size());
+        assertEquals(1, ai2.messagesOfType("matchSuccess").size());
+    }
+
+    @Test
+    void aivaiPairsAiAndModesRemainIsolated() {
+        ProtocolServer server = newServer();
+        FakeChannel pvpHuman = loginClient(server, "iso_h");
+        FakeChannel pveAi = loginClient(server, "iso_pve_ai");
+        FakeChannel ai1 = loginClient(server, "iso_ai1");
+        FakeChannel ai2 = loginClient(server, "iso_ai2");
+        clearChannels(pvpHuman, pveAi, ai1, ai2);
+
+        server.onMessage(pvpHuman, matchRequest("pvp", "human"));
+        server.onMessage(pveAi, matchRequest("pve", "ai"));
+        assertEquals(0, pvpHuman.messagesOfType("matchSuccess").size());
+        assertEquals(0, pveAi.messagesOfType("matchSuccess").size());
+
+        server.onMessage(ai1, matchRequest("aivai", "ai"));
+        server.onMessage(ai2, matchRequest("aivai", "ai"));
+        assertEquals(1, ai1.messagesOfType("matchSuccess").size());
+        assertEquals(1, ai2.messagesOfType("matchSuccess").size());
+    }
+
+    @Test
+    void repeatedStartMatchDoesNotDuplicateWaitingEntryAndStatusTotalsAllQueues() {
+        ProtocolServer server = newServer();
+        FakeChannel pvp = loginClient(server, "wait_pvp");
+        FakeChannel pveHuman = loginClient(server, "wait_pve_h");
+        FakeChannel pveAi = loginClient(server, "wait_pve_ai");
+        FakeChannel aivai = loginClient(server, "wait_aivai");
+
+        server.onMessage(pvp, matchRequest("pvp", "human"));
+        server.onMessage(pvp, matchRequest("pvp", "human"));
+        server.onMessage(pveHuman, matchRequest("pve", "human"));
+        server.onMessage(pveAi, matchRequest("pve", "ai"));
+        server.onMessage(aivai, matchRequest("aivai", "ai"));
+        server.onMessage(pvp, "{\"messageType\":\"serverStatus\"}");
+
+        // PVE 两端会立即成房，剩余 PVP 与 AIVAI 各一人，重复请求没有重复入队。
+        assertEquals(2, pvp.lastOfType("serverStatus").get("waitingUsers").getAsInt());
+    }
+
+    @Test
+    void cancelMatchCleansEveryModeQueueAndAllowsMatchingAgain() {
+        assertCancelAndRestart("cancel_pvp", "pvp", "human");
+        assertCancelAndRestart("cancel_pve_h", "pve", "human");
+        assertCancelAndRestart("cancel_pve_ai", "pve", "ai");
+        assertCancelAndRestart("cancel_aivai", "aivai", "ai");
+    }
+
+    @Test
+    void disconnectCleansModeQueue() {
+        ProtocolServer server = newServer();
+        FakeChannel disconnected = loginClient(server, "disconnect_pve");
+        server.onMessage(disconnected, matchRequest("pve", "human"));
+        server.onClosed(disconnected);
+        FakeChannel observer = new FakeChannel("observer");
+        server.onConnected(observer);
+        server.onMessage(observer, "{\"messageType\":\"serverStatus\"}");
+        assertEquals(0, observer.lastOfType("serverStatus").get("waitingUsers").getAsInt());
+    }
+
+    @Test
+    void invalidMatchRequestsReturn4002WithoutQueuePollution() {
+        ProtocolServer server = newServer();
+        FakeChannel client = loginClient(server, "invalid_mode");
+        String[] invalid = {
+                matchRequest("unknown", "human"),
+                matchRequest("pvp", "robot"),
+                matchRequest("pvp", "ai"),
+                matchRequest("aivai", "human"),
+                "{\"messageType\":\"startMatch\",\"mode\":\"pve\"}",
+                "{\"messageType\":\"startMatch\",\"clientType\":\"ai\"}"
+        };
+        for (String request : invalid) {
+            client.clear();
+            server.onMessage(client, request);
+            assertEquals(ProtocolServer.ERROR_INVALID_MATCH_MODE,
+                    client.lastOfType("error").get("code").getAsInt());
+        }
+        server.onMessage(client, "{\"messageType\":\"serverStatus\"}");
+        assertEquals(0, client.lastOfType("serverStatus").get("waitingUsers").getAsInt());
+    }
+
+    @Test
+    void matchedModeStillUsesExistingReadyAndGameStartFlow() {
+        ProtocolServer server = newServer();
+        FakeChannel human = loginClient(server, "ready_human");
+        FakeChannel ai = loginClient(server, "ready_ai");
+        clearChannels(human, ai);
+        server.onMessage(human, matchRequest("pve", "human"));
+        server.onMessage(ai, matchRequest("pve", "ai"));
+        human.clear();
+        ai.clear();
+
+        server.onMessage(human, "{\"messageType\":\"Ready\"}");
+        server.onMessage(ai, "{\"messageType\":\"Ready\"}");
+
+        assertEquals(1, human.messagesOfType("gameStart").size());
+        assertEquals(1, ai.messagesOfType("gameStart").size());
+    }
+
+    private static void assertCancelAndRestart(String userId, String mode, String clientType) {
+        ProtocolServer server = newServer();
+        FakeChannel client = loginClient(server, userId);
+        server.onMessage(client, matchRequest(mode, clientType));
+        server.onMessage(client, "{\"messageType\":\"cancelMatch\"}");
+        server.onMessage(client, "{\"messageType\":\"serverStatus\"}");
+        assertEquals(0, client.lastOfType("serverStatus").get("waitingUsers").getAsInt());
+        server.onMessage(client, matchRequest(mode, clientType));
+        server.onMessage(client, "{\"messageType\":\"serverStatus\"}");
+        assertEquals(1, client.lastOfType("serverStatus").get("waitingUsers").getAsInt());
+    }
+
+    private static String matchRequest(String mode, String clientType) {
+        return "{\"messageType\":\"startMatch\",\"mode\":\"" + mode
+                + "\",\"clientType\":\"" + clientType + "\"}";
+    }
+
+    private static void clearChannels(FakeChannel... channels) {
+        for (FakeChannel channel : channels) {
+            channel.clear();
+        }
+    }
+
     private static StartedGame startGame() {
         return startGame(65_000);
     }
