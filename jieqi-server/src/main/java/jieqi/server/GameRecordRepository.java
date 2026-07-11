@@ -17,14 +17,16 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
  * 已落盘棋谱的只读仓库。
  *
- * <p>仓库只扫描配置目录中的普通 {@code .json} 文件，并根据文件内容中的 roomId 查询，
+ * <p>仓库只扫描配置目录中的最终普通 {@code .json} 文件，并根据解析后的 recordId 查询，
  * 不用客户端输入拼接路径。这样既不会暴露进行中的 GameRecorder，也避免路径穿越读取目录外文件。</p>
  */
 final class GameRecordRepository {
@@ -57,7 +59,7 @@ final class GameRecordRepository {
         List<JsonObject> records = loadValidRecords();
         records.sort(Comparator
                 .comparingLong(GameRecordRepository::endTime).reversed()
-                .thenComparing(GameRecordRepository::roomId, Comparator.reverseOrder()));
+                .thenComparing(GameRecordRepository::recordId, Comparator.reverseOrder()));
 
         int total = records.size();
         int from = Math.min(offset, total);
@@ -70,16 +72,16 @@ final class GameRecordRepository {
     }
 
     /**
-     * 按棋谱内容中的 roomId 查找完整记录。
+     * 按解析后的唯一棋谱标识查找完整记录。
      *
-     * @param requestedRoomId 客户端请求的房间标识，仅用于和已解析内容比较。
+     * @param requestedRecordId 客户端请求的棋谱标识，仅用于和已解析内容比较。
      * @return 找到时返回原始 JSON 对象的副本，否则为空。
      * @throws RuntimeException 单个文件解析异常会在内部隔离，不向调用方传播。
      * @apiNote 即使传入 {@code ../x}，本方法也不会据此构造文件路径。
      */
-    Optional<JsonObject> findByRoomId(String requestedRoomId) {
+    Optional<JsonObject> findByRecordId(String requestedRecordId) {
         for (JsonObject record : loadValidRecords()) {
-            if (requestedRoomId.equals(roomId(record))) {
+            if (requestedRecordId.equals(recordId(record))) {
                 return Optional.of(record.deepCopy());
             }
         }
@@ -95,12 +97,23 @@ final class GameRecordRepository {
      */
     private List<JsonObject> loadValidRecords() {
         List<JsonObject> records = new ArrayList<>();
+        Set<String> recordIds = new HashSet<>();
         if (recordsDir == null || !Files.isDirectory(recordsDir, LinkOption.NOFOLLOW_LINKS)) {
             return records;
         }
         try (Stream<Path> files = Files.list(recordsDir)) {
             files.filter(GameRecordRepository::isJsonRegularFile)
-                    .forEach(path -> parseRecord(path).ifPresent(records::add));
+                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                    .forEach(path -> parseRecord(path).ifPresent(record -> {
+                        String id = recordId(record);
+                        if (recordIds.add(id)) {
+                            records.add(record);
+                        } else {
+                            // 重复标识会让详情查询不确定，因此稳定保留文件名排序后的第一份。
+                            System.err.println("skip duplicate game recordId " + id
+                                    + " from " + path.getFileName());
+                        }
+                    }));
         } catch (IOException ex) {
             System.err.println("game record directory read failed: " + ex.getMessage());
         }
@@ -118,7 +131,15 @@ final class GameRecordRepository {
             if (!parsed.isJsonObject() || !isValidRecord(parsed.getAsJsonObject())) {
                 throw new IllegalArgumentException("missing required record fields");
             }
-            return Optional.of(parsed.getAsJsonObject());
+            JsonObject record = parsed.getAsJsonObject();
+            if (record.has("recordId") && !isString(record, "recordId")) {
+                throw new IllegalArgumentException("invalid recordId");
+            }
+            if (!record.has("recordId")) {
+                // 旧棋谱以真实文件名作为兼容标识，只补充响应对象，不回写历史文件。
+                record.addProperty("recordId", stripJsonSuffix(path.getFileName().toString()));
+            }
+            return Optional.of(record);
         } catch (Exception ex) {
             // 文件级隔离是查询接口的安全边界，不能让一份损坏棋谱阻断整个列表或连接。
             System.err.println("skip invalid game record " + path.getFileName() + ": " + ex.getMessage());
@@ -150,6 +171,7 @@ final class GameRecordRepository {
 
     private static JsonObject toSummary(JsonObject record) {
         JsonObject summary = new JsonObject();
+        copy(record, summary, "recordId");
         copy(record, summary, "roomId");
         copy(record, summary, "redPlayerId");
         copy(record, summary, "blackPlayerId");
@@ -174,8 +196,12 @@ final class GameRecordRepository {
         return record.get("endTime").getAsLong();
     }
 
-    private static String roomId(JsonObject record) {
-        return record.get("roomId").getAsString();
+    private static String recordId(JsonObject record) {
+        return record.get("recordId").getAsString();
+    }
+
+    private static String stripJsonSuffix(String fileName) {
+        return fileName.substring(0, fileName.length() - ".json".length());
     }
 
     /**

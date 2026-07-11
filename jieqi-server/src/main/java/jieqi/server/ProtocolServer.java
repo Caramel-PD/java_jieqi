@@ -517,24 +517,24 @@ final class ProtocolServer {
      * 处理已登录客户端的单局棋谱详情查询。
      *
      * @param session 当前连接会话。
-     * @param json 请求 JSON，必须包含非空 roomId。
-     * @throws IllegalArgumentException roomId 缺失或类型错误时抛出，由分发层转为 error 4001。
-     * @apiNote roomId 只参与已解析内容比较，绝不参与文件路径拼接。
+     * @param json 请求 JSON，必须包含非空 recordId。
+     * @throws IllegalArgumentException recordId 缺失或类型错误时抛出，由分发层转为 error 4001。
+     * @apiNote recordId 只参与已解析内容比较，绝不参与文件路径拼接。
      */
     private void handleQueryGameRecord(Core.Session session, JsonObject json) {
         if (!requireLogin(session)) {
             return;
         }
-        JsonElement roomIdElement = Json.get(json, "roomId");
-        if (roomIdElement == null || !roomIdElement.isJsonPrimitive()
-                || !roomIdElement.getAsJsonPrimitive().isString()) {
-            throw new IllegalArgumentException("invalid roomId");
+        JsonElement recordIdElement = Json.get(json, "recordId");
+        if (recordIdElement == null || !recordIdElement.isJsonPrimitive()
+                || !recordIdElement.getAsJsonPrimitive().isString()) {
+            throw new IllegalArgumentException("invalid recordId");
         }
-        String roomId = roomIdElement.getAsString();
-        if (roomId.isBlank()) {
-            throw new IllegalArgumentException("empty roomId");
+        String recordId = recordIdElement.getAsString();
+        if (recordId.isBlank()) {
+            throw new IllegalArgumentException("empty recordId");
         }
-        gameRecords.findByRoomId(roomId).ifPresentOrElse(
+        gameRecords.findByRecordId(recordId).ifPresentOrElse(
                 record -> session.send(Messages.gameRecord(record)),
                 () -> session.send(Messages.error(ERROR_RECORD_NOT_FOUND, "game record not found")));
     }
@@ -706,9 +706,9 @@ final class ProtocolServer {
     static RepetitionOutcome repetitionOutcome(RepetitionVerdict verdict, Color mover) {
         return switch (verdict) {
             case NONE -> null;
-            case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition");
-            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition");
-            case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "noCapture");
+            case REPETITION_LOSS -> new RepetitionOutcome(false, mover.opposite(), "repetition_loss");
+            case REPETITION_DRAW -> new RepetitionOutcome(true, null, "repetition_draw");
+            case DRAW_NO_CAPTURE -> new RepetitionOutcome(true, null, "draw_no_capture");
         };
     }
 
@@ -1346,7 +1346,7 @@ final class ProtocolServer {
          *
          * @param reason 和棋原因。
          * @throws RuntimeException 当发送消息失败时可能由通道抛出；棋谱写失败会被捕获并记录。
-         * @apiNote 使用示例：80 半步无吃子触发 {@code finishDraw("noCapture")}。
+         * @apiNote 使用示例：80 半步无吃子触发 {@code finishDraw("draw_no_capture")}。
          */
         private void finishDraw(String reason) {
             if (finished) {

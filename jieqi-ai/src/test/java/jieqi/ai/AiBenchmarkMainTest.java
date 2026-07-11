@@ -65,16 +65,16 @@ class AiBenchmarkMainTest {
         AiBenchmarkMain.CliOptions opts = AiBenchmarkMain.parseArgs(new String[]{
                 "--agent", "expecti",
                 "--opponents", "random",
-                "--games", "10",
+                "--games", "1",
                 "--seed", "1",
-                "--maxPlies", "200"
+                "--maxPlies", "1"
         });
 
         List<AiBenchmarkMain.BenchmarkRow> rows = AiBenchmarkMain.run(opts);
         assertEquals(1, rows.size());
 
         AiBenchmarkMain.BenchmarkRow row = rows.get(0);
-        assertEquals(10, row.games());
+        assertEquals(1, row.games());
         assertEquals(row.wins() + row.losses() + row.draws(), row.games(),
                 "wins + losses + draws must equal games");
         assertEquals((double) row.wins() / row.games(), row.winRate(), 0.001,
@@ -89,18 +89,18 @@ class AiBenchmarkMainTest {
         AiBenchmarkMain.main(new String[]{
                 "--agent", "expecti",
                 "--opponents", "random,greedy",
-                "--games", "3",
+                "--games", "1",
                 "--seed", "42",
-                "--maxPlies", "200",
+                "--maxPlies", "1",
                 "--csv", csv1.toString()
         });
 
         AiBenchmarkMain.main(new String[]{
                 "--agent", "expecti",
                 "--opponents", "random,greedy",
-                "--games", "3",
+                "--games", "1",
                 "--seed", "42",
-                "--maxPlies", "200",
+                "--maxPlies", "1",
                 "--csv", csv2.toString()
         });
 

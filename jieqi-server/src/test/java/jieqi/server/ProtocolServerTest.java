@@ -4,10 +4,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import jieqi.common.Color;
+import jieqi.rules.BoardText;
 import jieqi.rules.RepetitionVerdict;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,6 +68,21 @@ class ProtocolServerTest {
     }
 
     @Test
+    void extraFieldsAreIgnoredForKnownMessages() {
+        ProtocolServer server = newServer();
+        FakeChannel channel = new FakeChannel("c1");
+        server.onConnected(channel);
+
+        server.onMessage(channel,
+                "{\"messageType\":\"ping\",\"timestamp\":1712345678901,\"clientClock\":\"forged\"}");
+
+        JsonObject pong = channel.lastOfType("pong");
+        assertEquals("pong", pong.get("messageType").getAsString());
+        assertEquals(1712345678901L, pong.get("timestamp").getAsLong());
+        assertFalse(pong.has("clientClock"));
+    }
+
+    @Test
     void badJsonReturnsErrorAndDoesNotCrash() {
         ProtocolServer server = newServer();
         FakeChannel channel = new FakeChannel("c1");
@@ -76,6 +93,21 @@ class ProtocolServerTest {
         JsonObject response = JsonParser.parseString(channel.last()).getAsJsonObject();
         assertEquals("error", response.get("messageType").getAsString());
         assertEquals(ProtocolServer.ERROR_BAD_JSON, response.get("code").getAsInt());
+    }
+
+    @Test
+    void badJsonDoesNotAffectOtherRooms() {
+        TwoStartedGames games = startTwoGames();
+        games.clear();
+
+        games.server().onMessage(games.room1().red(), "not json");
+        games.server().onMessage(games.room2().red(), move("b", 2, "e", 2, true));
+
+        JsonObject error = games.room1().red().lastOfType("error");
+        assertEquals(ProtocolServer.ERROR_BAD_JSON, error.get("code").getAsInt());
+        assertTrue(games.room2().red().lastOfType("moveResult").get("valid").getAsBoolean());
+        assertTrue(games.room2().black().lastOfType("moveResult").get("valid").getAsBoolean());
+        assertTrue(games.room1().black().messagesOfType("error").isEmpty());
     }
 
     @Test
@@ -460,6 +492,80 @@ class ProtocolServerTest {
     }
 
     @Test
+    void fromEnvDefaultsAreUsable() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of());
+
+        assertEquals(8887, config.port);
+        assertEquals(Path.of(".", "records"), config.recordsDir);
+        assertEquals(Path.of(".", "users.json"), config.usersFile);
+        assertEquals("virtual", config.initialBoardMode);
+    }
+
+    @Test
+    void legalEnvValuesOverrideServerConfigFields() {
+        Map<String, String> env = new HashMap<>();
+        env.put("JIEQI_HOME", "runtime-home");
+        env.put("JIEQI_PORT", "8899");
+        env.put("JIEQI_TURN_TIMEOUT_MS", "1200");
+        env.put("JIEQI_FIRSTHAND_WINDOW_MS", "300");
+        env.put("JIEQI_AUTO_READY_AFTER_MS", "75");
+        env.put("JIEQI_AUTO_REGISTER", "false");
+        env.put("JIEQI_REPETITION_LIMIT", "8");
+        env.put("JIEQI_REPETITION_MIN_REPEATS", "4");
+        env.put("JIEQI_NO_CAPTURE_LIMIT_HALF_MOVES", "16");
+        env.put("JIEQI_INITIAL_BOARD_MODE", "omit");
+        env.put("JIEQI_USERS_FILE", "custom-users.json");
+
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(env);
+
+        assertEquals(8899, config.port);
+        assertEquals(1200, config.turnTimeoutMs);
+        assertEquals(300, config.firstHandWindowMs);
+        assertEquals(75, config.autoReadyAfterMs);
+        assertFalse(config.autoRegisterOnLogin);
+        assertEquals(8, config.repetitionLimit);
+        assertEquals(4, config.repetitionMinRepeats);
+        assertEquals(16, config.noCaptureLimitHalfMoves);
+        assertEquals("omit", config.initialBoardMode);
+        assertEquals(Path.of("runtime-home", "records"), config.recordsDir);
+        assertEquals(Path.of("custom-users.json"), config.usersFile);
+    }
+
+    @Test
+    void invalidNumericEnvValuesFallbackToDefaults() {
+        Core.ServerConfig defaults = new Core.ServerConfig();
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of(
+                "JIEQI_PORT", "bad",
+                "JIEQI_REPETITION_LIMIT", "bad",
+                "JIEQI_REPETITION_MIN_REPEATS", "bad",
+                "JIEQI_NO_CAPTURE_LIMIT_HALF_MOVES", "bad"
+        ));
+
+        assertEquals(defaults.port, config.port);
+        assertEquals(defaults.repetitionLimit, config.repetitionLimit);
+        assertEquals(defaults.repetitionMinRepeats, config.repetitionMinRepeats);
+        assertEquals(defaults.noCaptureLimitHalfMoves, config.noCaptureLimitHalfMoves);
+    }
+
+    @Test
+    void recordsDirEnvOverridesRecordsDir() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of(
+                "JIEQI_HOME", "runtime-home",
+                "JIEQI_RECORDS_DIR", "custom-records"
+        ));
+
+        assertEquals(Path.of("custom-records"), config.recordsDir);
+        assertEquals(Path.of("runtime-home", "users.json"), config.usersFile);
+    }
+
+    @Test
+    void initialBoardModeOmitCanBeLoadedFromEnv() {
+        Core.ServerConfig config = Core.ServerConfig.fromEnv(Map.of("JIEQI_INITIAL_BOARD_MODE", "omit"));
+
+        assertEquals("omit", config.initialBoardMode);
+    }
+
+    @Test
     void blackRequestFirstHandAndRedDoesNotMakesBlackBecomeRed() {
         StartedGame game = startGame(false, true);
 
@@ -587,6 +693,77 @@ class ProtocolServerTest {
     }
 
     @Test
+    void hiddenCapturedPieceIsVisibleOnlyToCapturingPlayer() {
+        StartedGame game = startGame();
+        setRoomBoard(game, "4k4/9/9/x8/R3P4/9/9/9/9/4K4 r");
+        game.clear();
+
+        game.server.onMessage(game.red, move("a", 5, "a", 6, false));
+
+        JsonObject redMove = game.red.lastOfType("moveResult");
+        JsonObject blackMove = game.black.lastOfType("moveResult");
+        assertTrue(redMove.get("valid").getAsBoolean());
+        assertTrue(blackMove.get("valid").getAsBoolean());
+        assertTrue(redMove.has("capturedPiece"));
+        assertTrue(blackMove.has("capturedPiece"));
+        assertNotEquals("NULL", redMove.get("capturedPiece").getAsString());
+        assertEquals("NULL", blackMove.get("capturedPiece").getAsString());
+    }
+
+    @Test
+    void revealedCapturedPieceIsVisibleToBothPlayers() {
+        StartedGame game = startGame();
+        setRoomBoard(game, "4k4/9/9/r8/R3P4/9/9/9/9/4K4 r");
+        game.clear();
+
+        game.server.onMessage(game.red, move("a", 5, "a", 6, false));
+
+        JsonObject redMove = game.red.lastOfType("moveResult");
+        JsonObject blackMove = game.black.lastOfType("moveResult");
+        assertTrue(redMove.get("valid").getAsBoolean());
+        assertTrue(blackMove.get("valid").getAsBoolean());
+        assertEquals("rook", redMove.get("capturedPiece").getAsString());
+        assertEquals("rook", blackMove.get("capturedPiece").getAsString());
+    }
+
+    @Test
+    void nonCaptureMoveResultOmitsCapturedPiece() {
+        StartedGame game = startGame();
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+
+        JsonObject redMove = game.red.lastOfType("moveResult");
+        JsonObject blackMove = game.black.lastOfType("moveResult");
+        assertTrue(redMove.get("valid").getAsBoolean());
+        assertTrue(blackMove.get("valid").getAsBoolean());
+        assertFalse(redMove.has("capturedPiece"));
+        assertFalse(blackMove.has("capturedPiece"));
+    }
+
+    @Test
+    void recorderCapturedPieceDoesNotChangeDifferentiatedBroadcast(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        setRoomBoard(game, "4k4/9/9/x8/R3P4/9/9/9/9/4K4 r");
+        game.clear();
+
+        game.server.onMessage(game.red, move("a", 5, "a", 6, false));
+
+        JsonObject redMove = game.red.lastOfType("moveResult");
+        JsonObject blackMove = game.black.lastOfType("moveResult");
+        String recordedCapture = redMove.get("capturedPiece").getAsString();
+        assertNotEquals("NULL", recordedCapture);
+        assertEquals("NULL", blackMove.get("capturedPiece").getAsString());
+
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        JsonObject recordMove = readRecord(recordsDir, "room_1").getAsJsonArray("moves")
+                .get(0).getAsJsonObject();
+        assertEquals(recordedCapture, recordMove.get("capturedPiece").getAsString());
+        assertEquals("NULL", blackMove.get("capturedPiece").getAsString());
+    }
+
+    @Test
     void badMoveCoordinatesOrMissingFieldsDoNotCrash() {
         StartedGame game = startGame();
         game.clear();
@@ -645,10 +822,10 @@ class ProtocolServerTest {
         JsonObject redGameOver = game.red.lastOfType("gameOver");
         JsonObject blackGameOver = game.black.lastOfType("gameOver");
         assertEquals("draw", redGameOver.get("winner").getAsString());
-        assertEquals("noCapture", redGameOver.get("reason").getAsString());
+        assertEquals("draw_no_capture", redGameOver.get("reason").getAsString());
         assertFalse(redGameOver.has("winnerId"));
         assertEquals("draw", blackGameOver.get("winner").getAsString());
-        assertEquals("noCapture", blackGameOver.get("reason").getAsString());
+        assertEquals("draw_no_capture", blackGameOver.get("reason").getAsString());
         assertFalse(blackGameOver.has("winnerId"));
     }
 
@@ -677,7 +854,13 @@ class ProtocolServerTest {
 
         assertFalse(outcome.draw());
         assertEquals(Color.BLACK, outcome.winnerColor());
-        assertEquals("repetition", outcome.reason());
+        assertEquals("repetition_loss", outcome.reason());
+        JsonObject gameOver = JsonParser.parseString(Messages.gameOver(
+                outcome.winnerColor().name().toLowerCase(), outcome.reason(), "u2"))
+                .getAsJsonObject();
+        assertEquals("black", gameOver.get("winner").getAsString());
+        assertEquals("repetition_loss", gameOver.get("reason").getAsString());
+        assertEquals("u2", gameOver.get("winnerId").getAsString());
     }
 
     @Test
@@ -686,11 +869,25 @@ class ProtocolServerTest {
                 ProtocolServer.repetitionOutcome(RepetitionVerdict.REPETITION_DRAW, Color.BLACK);
 
         assertTrue(outcome.draw());
-        assertEquals("repetition", outcome.reason());
+        assertEquals("repetition_draw", outcome.reason());
         JsonObject gameOver = JsonParser.parseString(Messages.gameOver("draw", outcome.reason(), null))
                 .getAsJsonObject();
         assertEquals("draw", gameOver.get("winner").getAsString());
-        assertEquals("repetition", gameOver.get("reason").getAsString());
+        assertEquals("repetition_draw", gameOver.get("reason").getAsString());
+        assertFalse(gameOver.has("winnerId"));
+    }
+
+    @Test
+    void noCaptureVerdictMapsToDrawWithoutWinnerId() {
+        ProtocolServer.RepetitionOutcome outcome =
+                ProtocolServer.repetitionOutcome(RepetitionVerdict.DRAW_NO_CAPTURE, Color.RED);
+
+        assertTrue(outcome.draw());
+        assertEquals("draw_no_capture", outcome.reason());
+        JsonObject gameOver = JsonParser.parseString(Messages.gameOver("draw", outcome.reason(), null))
+                .getAsJsonObject();
+        assertEquals("draw", gameOver.get("winner").getAsString());
+        assertEquals("draw_no_capture", gameOver.get("reason").getAsString());
         assertFalse(gameOver.has("winnerId"));
     }
 
@@ -902,6 +1099,7 @@ class ProtocolServerTest {
 
         game.server.onMessage(game.red, move("b", 2, "e", 2, true));
         game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.server.onMessage(game.black, "{\"messageType\":\"drawResponse\",\"accept\":true}");
         game.red.closeConnection();
         game.server.onClosed(game.red);
 
@@ -1007,6 +1205,34 @@ class ProtocolServerTest {
     }
 
     @Test
+    void resignWritesJsonAndJieqiTextRecords(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        JsonObject record = readRecord(recordsDir, "room_1");
+        String recordId = record.get("recordId").getAsString();
+        assertTrue(Files.exists(recordsDir.resolve(recordId + ".json")));
+        assertTrue(Files.exists(recordsDir.resolve(recordId + ".jieqi")));
+    }
+
+    @Test
+    void jieqiTextRecordContainsRequiredHeaders(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("Red: u1"));
+        assertTrue(text.contains("Black: u2"));
+        assertTrue(text.contains("Start: "));
+        assertTrue(text.contains("Result: black(u2)"));
+        assertTrue(text.contains("Reason: resign"));
+    }
+
+    @Test
     void registerSuccess() {
         ProtocolServer server = newServer(false);  // 关闭自动注册，单独测 register
         FakeChannel channel = new FakeChannel("c1");
@@ -1069,6 +1295,40 @@ class ProtocolServerTest {
     }
 
     @Test
+    void oversizedFrameOnlyClosesSenderAndOtherConnectionStillWorks() {
+        ProtocolServer server = newServer();
+        FakeChannel oversized = new FakeChannel("oversized");
+        FakeChannel healthy = new FakeChannel("healthy");
+        server.onConnected(oversized);
+        server.onConnected(healthy);
+
+        String bigMessage = "{\"messageType\":\"ping\",\"timestamp\":1,\"pad\":\""
+                + "x".repeat(1100) + "\"}";
+        server.onMessage(oversized, bigMessage);
+        server.onMessage(healthy, "{\"messageType\":\"ping\",\"timestamp\":2}");
+
+        assertFalse(oversized.isOpen());
+        assertTrue(healthy.isOpen());
+        assertEquals(2, healthy.lastOfType("pong").get("timestamp").getAsLong());
+        assertTrue(oversized.outbox.isEmpty());
+    }
+
+    @Test
+    void forgedTimestampDoesNotAffectServerTurnTimer() throws Exception {
+        StartedGame game = startGame(80);
+        game.clear();
+
+        game.server.onMessage(game.red,
+                "{\"messageType\":\"ping\",\"timestamp\":9999999999999,\"turnTimeoutMs\":999999999}");
+
+        waitUntil(() -> !game.red.messagesOfType("timeout").isEmpty()
+                && !game.black.messagesOfType("timeout").isEmpty());
+        JsonObject timeout = game.red.lastOfType("timeout");
+        assertEquals("u1", timeout.get("loserId").getAsString());
+        assertEquals("u2", timeout.get("winnerId").getAsString());
+    }
+
+    @Test
     void legalMoveIsRecorded(@TempDir Path recordsDir) throws Exception {
         StartedGame game = startGame(65_000, recordsDir);
         game.clear();
@@ -1090,6 +1350,35 @@ class ProtocolServerTest {
         assertFalse(move.get("flipResult").isJsonNull());
         assertTrue(move.has("capturedPiece"));
         assertTrue(move.get("timestamp").getAsLong() > 0);
+    }
+
+    @Test
+    void legalFlipMoveIsWrittenToJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("1. red b2-e2"));
+        assertTrue(text.contains("isFlip=true"));
+        assertTrue(text.contains("flipResult="));
+    }
+
+    @Test
+    void capturedMoveIsWrittenToJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        setRoomBoard(game, "4k4/9/9/r8/R3P4/9/9/9/9/4K4 r");
+        game.clear();
+
+        game.server.onMessage(game.red, move("a", 5, "a", 6, false));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("1. red a5-a6"));
+        // 确定性的明车吃车局面可直接校验棋谱真值，避免随机暗子类型导致测试不稳定。
+        assertTrue(text.contains("capturedPiece=rook"));
     }
 
     @Test
@@ -1119,6 +1408,49 @@ class ProtocolServerTest {
     }
 
     @Test
+    void illegalMoveDoesNotBreakJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, move("b", 2, "c", 3, true));
+        game.server.onMessage(game.red, move("b", 2, "e", 2, true));
+        game.server.onMessage(game.black, "{\"messageType\":\"Resign\"}");
+
+        String text = readTextRecord(recordsDir, "room_1");
+        assertTrue(text.contains("1. red b2-c3 invalid"));
+        assertTrue(text.contains("2. red b2-e2"));
+        assertTrue(text.contains("Reason: resign"));
+    }
+
+    @Test
+    void repeatedGameOverDoesNotRewriteJieqiTextRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.clear();
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        Path textFile = textRecordPath(recordsDir, "room_1");
+        String firstText = Files.readString(textFile, StandardCharsets.UTF_8);
+        long firstSize = Files.size(textFile);
+
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+        game.red.closeConnection();
+        game.server.onClosed(game.red);
+
+        assertEquals(firstText, Files.readString(textFile, StandardCharsets.UTF_8));
+        assertEquals(firstSize, Files.size(textFile));
+    }
+
+    @Test
+    void nullRecordsDirDoesNotBreakGameOver() {
+        StartedGame game = startGame(65_000, null);
+        game.clear();
+
+        assertDoesNotThrow(() -> game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}"));
+        assertEquals("gameOver", game.red.lastOfType("gameOver").get("messageType").getAsString());
+        assertEquals("gameOver", game.black.lastOfType("gameOver").get("messageType").getAsString());
+    }
+
+    @Test
     void gameRecordQueriesRequireLogin(@TempDir Path recordsDir) {
         ProtocolServer server = newServer(65_000, recordsDir);
         FakeChannel channel = new FakeChannel("anonymous");
@@ -1129,7 +1461,7 @@ class ProtocolServerTest {
 
         channel.clear();
         server.onMessage(channel,
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"room_1\"}");
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"room_1_100\"}");
         assertEquals(ProtocolServer.ERROR_AUTH, channel.lastOfType("error").get("code").getAsInt());
     }
 
@@ -1157,7 +1489,7 @@ class ProtocolServerTest {
     }
 
     @Test
-    void recordListSortsPagesCapsLimitAndBuildsSummaries(@TempDir Path recordsDir) throws Exception {
+    void listReturnsRecordIdAndRoomId(@TempDir Path recordsDir) throws Exception {
         writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 1);
         writeGameRecord(recordsDir, "room_2", 200, "draw", null, "noCapture", 2);
         writeGameRecord(recordsDir, "room_3", 200, "black", "u6", "timeout", 3);
@@ -1172,9 +1504,10 @@ class ProtocolServerTest {
         JsonObject firstPage = client.lastOfType("gameRecordList");
         assertEquals(3, firstPage.get("total").getAsInt());
         JsonArray records = firstPage.getAsJsonArray("records");
-        // endTime 相同的记录按 roomId 降序，确保不同文件系统上的结果一致。
+        // endTime 相同的记录按 recordId 降序，确保不同文件系统上的结果一致。
         assertEquals("room_3", records.get(0).getAsJsonObject().get("roomId").getAsString());
         assertEquals("room_2", records.get(1).getAsJsonObject().get("roomId").getAsString());
+        assertEquals("room_3_200", records.get(0).getAsJsonObject().get("recordId").getAsString());
         assertEquals(3, records.get(0).getAsJsonObject().get("moveCount").getAsInt());
         assertTrue(records.get(1).getAsJsonObject().get("winnerId").isJsonNull());
 
@@ -1193,14 +1526,14 @@ class ProtocolServerTest {
     }
 
     @Test
-    void recordDetailReturnsOriginalMovesAndMissingRecordError(@TempDir Path recordsDir) throws Exception {
+    void detailQueriesByRecordId(@TempDir Path recordsDir) throws Exception {
         writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 2);
         ProtocolServer server = newServer(65_000, recordsDir);
         FakeChannel client = loginClient(server, "viewer");
         client.clear();
 
         server.onMessage(client,
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"room_1\"}");
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"room_1_100\"}");
 
         JsonObject record = client.lastOfType("gameRecord").getAsJsonObject("record");
         assertEquals("room_1", record.get("roomId").getAsString());
@@ -1209,14 +1542,14 @@ class ProtocolServerTest {
 
         client.clear();
         server.onMessage(client,
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"missing\"}");
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"missing\"}");
         JsonObject error = client.lastOfType("error");
         assertEquals(ProtocolServer.ERROR_RECORD_NOT_FOUND, error.get("code").getAsInt());
         assertEquals("game record not found", error.get("message").getAsString());
     }
 
     @Test
-    void recordQueryRejectsInvalidArgumentsAndCannotTraversePaths(@TempDir Path root) throws Exception {
+    void pathTraversalCannotReadOutsideRecordsDir(@TempDir Path root) throws Exception {
         Path recordsDir = Files.createDirectory(root.resolve("records"));
         writeGameRecord(root, "secret", 999, "red", "u1", "resign", 0);
         ProtocolServer server = newServer(65_000, recordsDir);
@@ -1224,7 +1557,7 @@ class ProtocolServerTest {
         client.clear();
 
         server.onMessage(client,
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"../secret\"}");
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"../secret\"}");
         assertEquals(ProtocolServer.ERROR_RECORD_NOT_FOUND,
                 client.lastOfType("error").get("code").getAsInt());
 
@@ -1232,8 +1565,8 @@ class ProtocolServerTest {
                 "{\"messageType\":\"queryGameRecords\",\"offset\":-1}",
                 "{\"messageType\":\"queryGameRecords\",\"limit\":0}",
                 "{\"messageType\":\"queryGameRecords\",\"limit\":1.5}",
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"\"}",
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":123}"
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"\"}",
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":123}"
         };
         for (String request : invalidRequests) {
             client.clear();
@@ -1243,7 +1576,7 @@ class ProtocolServerTest {
     }
 
     @Test
-    void recordQueriesDoNotChangeRoomStateOrResetTurnTimer(@TempDir Path recordsDir) throws Exception {
+    void queryDoesNotChangeRoomOrTimer(@TempDir Path recordsDir) throws Exception {
         writeGameRecord(recordsDir, "history", 100, "red", "old-red", "resign", 0);
         StartedGame game = startGame(180, recordsDir);
         game.clear();
@@ -1252,13 +1585,123 @@ class ProtocolServerTest {
 
         game.server.onMessage(game.red, "{\"messageType\":\"queryGameRecords\"}");
         game.server.onMessage(game.red,
-                "{\"messageType\":\"queryGameRecord\",\"roomId\":\"history\"}");
+                "{\"messageType\":\"queryGameRecord\",\"recordId\":\"history_100\"}");
 
         JsonObject after = roomStatus(game);
         assertEquals(before.get("currentTurn").getAsString(), after.get("currentTurn").getAsString());
         assertEquals(before.get("started").getAsBoolean(), after.get("started").getAsBoolean());
         waitUntil(() -> !game.red.messagesOfType("gameOver").isEmpty());
         assertEquals("timeout", game.red.lastOfType("gameOver").get("reason").getAsString());
+    }
+
+    @Test
+    void newRecordContainsFormatVersionAndRecordId(@TempDir Path recordsDir) throws Exception {
+        StartedGame game = startGame(65_000, recordsDir);
+        game.server.onMessage(game.red, "{\"messageType\":\"Resign\"}");
+
+        JsonObject record = readRecord(recordsDir, "room_1");
+        String recordId = record.get("recordId").getAsString();
+        assertEquals(1, record.get("formatVersion").getAsInt());
+        assertEquals("room_1_" + record.get("endTime").getAsLong(), recordId);
+        assertTrue(Files.exists(recordsDir.resolve(recordId + ".json")));
+        assertTrue(Files.exists(recordsDir.resolve(recordId + ".jieqi")));
+    }
+
+    @Test
+    void serverRestartDoesNotOverwriteOldRoomIdRecord(@TempDir Path recordsDir) throws Exception {
+        StartedGame first = startGame(newServer(65_000, recordsDir), null, null);
+        first.server.onMessage(first.red, "{\"messageType\":\"Resign\"}");
+        Thread.sleep(2);
+        StartedGame second = startGame(newServer(65_000, recordsDir), null, null);
+        second.server.onMessage(second.red, "{\"messageType\":\"Resign\"}");
+
+        GameRecordRepository.QueryResult result = new GameRecordRepository(recordsDir).query(0, 20);
+        assertEquals(2, result.total());
+        assertEquals("room_1", result.records().get(0).get("roomId").getAsString());
+        assertEquals("room_1", result.records().get(1).get("roomId").getAsString());
+        assertNotEquals(result.records().get(0).get("recordId").getAsString(),
+                result.records().get(1).get("recordId").getAsString());
+    }
+
+    @Test
+    void duplicateRoomIdsCanBothBeQueried(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 1);
+        writeGameRecord(recordsDir, "room_1", 200, "black", "u2", "timeout", 2);
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel client = loginClient(server, "viewer");
+
+        server.onMessage(client, "{\"messageType\":\"queryGameRecord\",\"recordId\":\"room_1_100\"}");
+        assertEquals(100, client.lastOfType("gameRecord").getAsJsonObject("record").get("endTime").getAsLong());
+        client.clear();
+        server.onMessage(client, "{\"messageType\":\"queryGameRecord\",\"recordId\":\"room_1_200\"}");
+        assertEquals(200, client.lastOfType("gameRecord").getAsJsonObject("record").get("endTime").getAsLong());
+    }
+
+    @Test
+    void legacyRecordWithoutRecordIdCanBeQueried(@TempDir Path recordsDir) throws Exception {
+        writeLegacyGameRecord(recordsDir, "legacy_file", "room_old", 123);
+        ProtocolServer server = newServer(65_000, recordsDir);
+        FakeChannel client = loginClient(server, "viewer");
+
+        server.onMessage(client, "{\"messageType\":\"queryGameRecords\"}");
+        JsonObject summary = client.lastOfType("gameRecordList").getAsJsonArray("records")
+                .get(0).getAsJsonObject();
+        assertEquals("legacy_file", summary.get("recordId").getAsString());
+        assertEquals("room_old", summary.get("roomId").getAsString());
+        client.clear();
+        server.onMessage(client, "{\"messageType\":\"queryGameRecord\",\"recordId\":\"legacy_file\"}");
+        assertEquals("room_old", client.lastOfType("gameRecord").getAsJsonObject("record")
+                .get("roomId").getAsString());
+    }
+
+    @Test
+    void temporaryFilesAreNotListed(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 0);
+        Files.writeString(recordsDir.resolve("partial.json.tmp"), "{}", StandardCharsets.UTF_8);
+
+        GameRecordRepository.QueryResult result = new GameRecordRepository(recordsDir).query(0, 20);
+
+        assertEquals(1, result.total());
+        assertEquals("room_1_100", result.records().get(0).get("recordId").getAsString());
+    }
+
+    @Test
+    void damagedRecordDoesNotBlockOtherRecords(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 0);
+        Files.writeString(recordsDir.resolve("damaged.json"), "not json", StandardCharsets.UTF_8);
+
+        GameRecordRepository.QueryResult result = new GameRecordRepository(recordsDir).query(0, 20);
+
+        assertEquals(1, result.total());
+        assertEquals("room_1_100", result.records().get(0).get("recordId").getAsString());
+    }
+
+    @Test
+    void duplicateRecordIdKeepsOnlyFirstStableFile(@TempDir Path recordsDir) throws Exception {
+        writeGameRecord(recordsDir, "room_1", 100, "red", "u1", "resign", 0);
+        Path first = recordsDir.resolve("room_1_100.json");
+        JsonObject duplicate = JsonParser.parseString(Files.readString(first, StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        duplicate.addProperty("roomId", "duplicate_room");
+        Files.writeString(recordsDir.resolve("z_duplicate.json"), duplicate.toString(), StandardCharsets.UTF_8);
+
+        GameRecordRepository.QueryResult result = new GameRecordRepository(recordsDir).query(0, 20);
+
+        assertEquals(1, result.total());
+        assertEquals("room_1", result.records().get(0).get("roomId").getAsString());
+    }
+
+    @Test
+    void failedWriteDoesNotExposePartialJson(@TempDir Path root) throws Exception {
+        Path invalidRecordsDir = root.resolve("records");
+        Files.writeString(invalidRecordsDir, "not a directory", StandardCharsets.UTF_8);
+        GameRecorder recorder = GameRecorder.start("room_1", "u1", "u2");
+        recorder.finish("red", "u1", "resign");
+
+        assertThrows(Exception.class, () -> recorder.writeTo(invalidRecordsDir));
+        try (var files = Files.list(root)) {
+            assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".json")));
+        }
     }
 
     private static ProtocolServer newServer() {
@@ -1436,10 +1879,20 @@ class ProtocolServerTest {
     }
 
     private static JsonObject readRecord(Path recordsDir, String roomId) throws Exception {
-        Path file = recordsDir.resolve(roomId + ".json");
-        assertTrue(Files.exists(file), "record file should exist: " + file);
-        String json = Files.readString(file, StandardCharsets.UTF_8);
-        return JsonParser.parseString(json).getAsJsonObject();
+        try (var files = Files.list(recordsDir)) {
+            return files.filter(path -> path.getFileName().toString().endsWith(".json"))
+                    .map(path -> {
+                        try {
+                            return JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8))
+                                    .getAsJsonObject();
+                        } catch (Exception ex) {
+                            throw new IllegalStateException(ex);
+                        }
+                    })
+                    .filter(record -> roomId.equals(record.get("roomId").getAsString()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("record file should exist for room: " + roomId));
+        }
     }
 
     private static FakeChannel loginClient(ProtocolServer server, String userId) {
@@ -1460,6 +1913,9 @@ class ProtocolServerTest {
                                         int moveCount) throws Exception {
         Files.createDirectories(recordsDir);
         JsonObject record = new JsonObject();
+        String recordId = roomId + "_" + endTime;
+        record.addProperty("formatVersion", 1);
+        record.addProperty("recordId", recordId);
         record.addProperty("roomId", roomId);
         record.addProperty("redPlayerId", roomId + "_red");
         record.addProperty("blackPlayerId", roomId + "_black");
@@ -1489,7 +1945,70 @@ class ProtocolServerTest {
             moves.add(move);
         }
         record.add("moves", moves);
-        Files.writeString(recordsDir.resolve(roomId + ".json"), record.toString(), StandardCharsets.UTF_8);
+        Files.writeString(recordsDir.resolve(recordId + ".json"), record.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void writeLegacyGameRecord(Path recordsDir, String fileStem,
+                                              String roomId, long endTime) throws Exception {
+        writeGameRecord(recordsDir, roomId, endTime, "red", roomId + "_red", "resign", 0);
+        Path generated = recordsDir.resolve(roomId + "_" + endTime + ".json");
+        JsonObject legacy = JsonParser.parseString(Files.readString(generated, StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        legacy.remove("formatVersion");
+        legacy.remove("recordId");
+        Files.delete(generated);
+        Files.writeString(recordsDir.resolve(fileStem + ".json"), legacy.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static String readTextRecord(Path recordsDir, String roomId) throws Exception {
+        return Files.readString(textRecordPath(recordsDir, roomId), StandardCharsets.UTF_8);
+    }
+
+    private static Path textRecordPath(Path recordsDir, String roomId) throws Exception {
+        JsonObject record = readRecord(recordsDir, roomId);
+        Path file = recordsDir.resolve(record.get("recordId").getAsString() + ".jieqi");
+        assertTrue(Files.exists(file), "text record file should exist: " + file);
+        return file;
+    }
+
+    /**
+     * 为协议可见性测试注入一个最小棋盘。
+     *
+     * @param game 已完成 gameStart 的测试对局。
+     * @param boardText BoardText 格式局面文本。
+     * @throws RuntimeException 反射失败时抛出，说明服务端房间结构发生变化，测试需要同步调整。
+     * @apiNote 使用示例：{@code setRoomBoard(game, "4k4/9/9/x8/R3P4/9/9/9/9/4K4 r");}
+     */
+    private static void setRoomBoard(StartedGame game, String boardText) {
+        try {
+            Object room = roomById(game.server, "room_1");
+            Field boardField = room.getClass().getDeclaredField("board");
+            boardField.setAccessible(true);
+            Core.ServerBoard board = (Core.ServerBoard) boardField.get(room);
+            // 生产代码不暴露改盘接口；这里反射只服务于 Q1/Q13 的确定性场景，避免依赖随机翻子推进。
+            board.testSetBoard(BoardText.board(boardText));
+        } catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException("failed to inject test board", ex);
+        }
+    }
+
+    /**
+     * 从协议服务器内部房间表取出指定房间。
+     *
+     * @param server 测试中的协议服务器。
+     * @param roomId 房间编号。
+     * @return GameRoom 实例，返回 Object 以避免测试依赖私有内部类类型。
+     * @throws ReflectiveOperationException 当私有字段访问失败时抛出。
+     * @apiNote 使用示例：{@code Object room = roomById(server, "room_1");}
+     */
+    @SuppressWarnings("unchecked")
+    private static Object roomById(ProtocolServer server, String roomId) throws ReflectiveOperationException {
+        Field roomsField = ProtocolServer.class.getDeclaredField("rooms");
+        roomsField.setAccessible(true);
+        Map<String, Object> rooms = (Map<String, Object>) roomsField.get(server);
+        Object room = rooms.get(roomId);
+        assertTrue(room != null, "room should exist: " + roomId);
+        return room;
     }
 
     private static void waitUntil(Condition condition) throws Exception {
