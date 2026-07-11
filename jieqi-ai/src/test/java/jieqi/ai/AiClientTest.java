@@ -141,6 +141,151 @@ class AiClientTest {
     }
 
     @Test
+    void completeTextFrameProcessesMessage() {
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), new ArrayList<>()::add);
+
+        client.receiveTextForTesting(gameStart(false), true);
+
+        assertTrue(client.gameState().isPresent());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+    }
+
+    @Test
+    void fragmentedGameStartWaitsUntilLastFrame() {
+        FixedAgent agent = new FixedAgent(Optional.empty());
+        AiClient client = new AiClient(AiClientConfig.defaults(), agent, new ArrayList<>()::add);
+        String json = gameStart(false);
+        int split = json.indexOf("\"initialBoard\"");
+
+        client.receiveTextForTesting(json.substring(0, split), false);
+
+        assertTrue(client.gameState().isEmpty());
+        assertEquals(0, agent.calls);
+        assertTrue(client.bufferedTextLengthForTesting() > 0);
+
+        client.receiveTextForTesting(json.substring(split), true);
+
+        assertTrue(client.gameState().isPresent());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+    }
+
+    @Test
+    void fragmentedInsideInitialBoardStringParsesAfterJoin() {
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), new ArrayList<>()::add);
+        String json = gameStart(false);
+        int split = json.indexOf("\"rook\"") + 3;
+
+        sendInTwoTextFrames(client, json, split);
+
+        assertTrue(client.gameState().isPresent());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+    }
+
+    @Test
+    void singleCharacterFragmentsParseAfterFinalFrame() {
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), new ArrayList<>()::add);
+        String json = gameStart(false);
+
+        for (int i = 0; i < json.length(); i++) {
+            client.receiveTextForTesting(json.substring(i, i + 1), i == json.length() - 1);
+        }
+
+        assertTrue(client.gameState().isPresent());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+    }
+
+    @Test
+    void consecutiveFragmentedMessagesDoNotMixTogether() {
+        List<String> outbound = new ArrayList<>();
+        AiClient client = new AiClient(AiClientConfig.defaults(), new FixedAgent(Optional.empty()), outbound::add);
+        String loginResult = """
+                {"messageType":"loginResult","success":true,"message":"ok","userId":"ai"}
+                """;
+        String matchSuccess = """
+                {"messageType":"matchSuccess","roomId":"r","opponentId":"p","opponentNickname":"P"}
+                """;
+
+        sendInTwoTextFrames(client, loginResult, 19);
+        sendInTwoTextFrames(client, matchSuccess, 23);
+
+        assertEquals("startMatch", messageType(outbound.get(0)));
+        assertEquals("Ready", messageType(outbound.get(1)));
+        assertEquals(0, client.bufferedTextLengthForTesting());
+    }
+
+    @Test
+    void parseFailureClearsBufferAndNextMessageCanStillProcess() {
+        List<String> logs = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.empty()),
+                new ArrayList<>()::add,
+                logs::add);
+
+        client.receiveTextForTesting("{\"messageType\":\"gameStart\",\"initialBoard\":[\"", true);
+        client.receiveTextForTesting(gameStart(false), true);
+
+        assertTrue(logs.stream().anyMatch(log -> log.contains("connection error")));
+        assertEquals(0, client.bufferedTextLengthForTesting());
+        assertFalse(client.stopped());
+        assertTrue(client.gameState().isPresent());
+    }
+
+    @Test
+    void oversizedTextMessageStopsAndClearsBuffer() {
+        List<String> logs = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.empty()),
+                new ArrayList<>()::add,
+                logs::add);
+
+        client.receiveTextForTesting("x".repeat(AiClient.MAX_TEXT_MESSAGE_CHARS + 1), false);
+
+        assertTrue(client.stopped());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+        assertTrue(logs.stream().anyMatch(log -> log.contains("exceeds")));
+        assertTrue(logs.stream().anyMatch(log -> log.contains("connection stopped")));
+    }
+
+    @Test
+    void onErrorClearsIncompleteBufferAndDoesNotLogGameOver() {
+        List<String> logs = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.empty()),
+                new ArrayList<>()::add,
+                logs::add);
+
+        client.receiveTextForTesting("{\"messageType\"", false);
+        client.onErrorForTesting(new RuntimeException("boom"));
+
+        assertTrue(client.stopped());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+        assertTrue(logs.stream().anyMatch(log -> log.contains("connection error: boom")));
+        assertTrue(logs.stream().anyMatch(log -> log.contains("connection stopped")));
+        assertFalse(logs.contains("game over"));
+    }
+
+    @Test
+    void onCloseClearsIncompleteBufferAndStopsConnection() {
+        List<String> logs = new ArrayList<>();
+        AiClient client = new AiClient(
+                AiClientConfig.defaults(),
+                new FixedAgent(Optional.empty()),
+                new ArrayList<>()::add,
+                logs::add);
+
+        client.receiveTextForTesting("{\"messageType\"", false);
+        client.onCloseForTesting();
+
+        assertTrue(client.stopped());
+        assertEquals(0, client.bufferedTextLengthForTesting());
+        assertTrue(logs.stream().anyMatch(log -> log.contains("connection stopped")));
+        assertFalse(logs.contains("game over"));
+    }
+
+    @Test
     void registerSuccessStartsMatch() {
         List<String> outbound = new ArrayList<>();
         AiClientConfig config = new AiClientConfig(
@@ -200,10 +345,12 @@ class AiClientTest {
     @Test
     void gameOverStopsFurtherMoves() throws InterruptedException {
         List<String> outbound = new ArrayList<>();
+        List<String> logs = new ArrayList<>();
         AiClient client = new AiClient(
                 AiClientConfig.defaults(),
                 new FixedAgent(Optional.of(Move.parse("a0a1"))),
-                outbound::add);
+                outbound::add,
+                logs::add);
 
         client.handleServerMessage(gameStart(true));
         client.handleServerMessage("""
@@ -215,6 +362,7 @@ class AiClientTest {
         assertTrue(client.awaitStopped(1, TimeUnit.MILLISECONDS));
         assertTrue(afterStop.isEmpty());
         assertEquals(1, outbound.size(), "only the firstHand move should have been sent");
+        assertTrue(logs.contains("game over"));
     }
 
     @Test
@@ -225,6 +373,11 @@ class AiClientTest {
 
     private static String messageType(String json) {
         return Json.optString(Json.parseObject(json), "messageType", null);
+    }
+
+    private static void sendInTwoTextFrames(AiClient client, String json, int split) {
+        client.receiveTextForTesting(json.substring(0, split), false);
+        client.receiveTextForTesting(json.substring(split), true);
     }
 
     private static AiClientConfig configWithMode(String mode) {
