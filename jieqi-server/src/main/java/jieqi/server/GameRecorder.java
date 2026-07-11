@@ -17,6 +17,8 @@ import jieqi.common.PieceType;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.Path;
 
 /**
@@ -37,10 +39,11 @@ import java.nio.file.Path;
  * }</pre>
  */
 final class GameRecorder {
+    private static final int FORMAT_VERSION = 1;
     /** 棋谱用于机器读取和人工排错，保留 null 字段可以稳定 JSON schema。 */
     private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
 
-    /** 房间编号作为棋谱主键，也作为默认文件名的一部分。 */
+    /** 房间编号用于关联在线房间；唯一棋谱标识还会追加终局时间。 */
     private final String roomId;
     /** 红方玩家 ID，记录开局后的最终红黑分配结果。 */
     private final String redPlayerId;
@@ -56,8 +59,10 @@ final class GameRecorder {
     private String winner;
     /** 胜方玩家 ID；和棋时按协议扩展口径保持为 null。 */
     private String winnerId;
-    /** 终局原因，例如 resign、timeout、noCapture 或 repetition。 */
+    /** 终局原因，例如 resign、timeout、draw_no_capture 或 repetition_loss。 */
     private String reason;
+    /** 终局后由 roomId 与 endTime 组成，跨服务器重启仍可区分同名房间。 */
+    private String recordId;
     /** 防止 finishGame 幂等调用时重复覆盖同一个棋谱文件。 */
     private boolean written;
 
@@ -137,6 +142,7 @@ final class GameRecorder {
         if (endTime == 0) {
             // finishGame 可能被超时、断线、认输等路径重复触发；只保留首次终局事实。
             endTime = System.currentTimeMillis();
+            recordId = roomId + "_" + endTime;
             this.winner = winner;
             this.winnerId = winnerId;
             this.reason = reason;
@@ -155,10 +161,30 @@ final class GameRecorder {
             return;
         }
         Files.createDirectories(recordsDir);
-        // 两种棋谱必须在同一个幂等入口写出，避免重复 gameOver 时只更新其中一种格式。
-        Files.writeString(recordsDir.resolve(roomId + ".json"), GSON.toJson(toJson()), StandardCharsets.UTF_8);
-        Files.writeString(recordsDir.resolve(roomId + ".jieqi"), toText(), StandardCharsets.UTF_8);
-        written = true;
+        if (recordId == null) {
+            throw new IOException("game record has not finished");
+        }
+        Path jsonTarget = recordsDir.resolve(recordId + ".json");
+        Path textTarget = recordsDir.resolve(recordId + ".jieqi");
+        Path jsonTemp = Files.createTempFile(recordsDir, recordId + "_", ".json.tmp");
+        Path textTemp = Files.createTempFile(recordsDir, recordId + "_", ".jieqi.tmp");
+        boolean textPublished = false;
+        try {
+            Files.writeString(jsonTemp, GSON.toJson(toJson()), StandardCharsets.UTF_8);
+            Files.writeString(textTemp, toText(), StandardCharsets.UTF_8);
+            // JSON 是查询入口，最后发布可保证仓库看见 JSON 时配套文本已经完整存在。
+            moveAtomically(textTemp, textTarget);
+            textPublished = true;
+            moveAtomically(jsonTemp, jsonTarget);
+            written = true;
+        } catch (IOException ex) {
+            Files.deleteIfExists(jsonTemp);
+            Files.deleteIfExists(textTemp);
+            if (textPublished) {
+                Files.deleteIfExists(textTarget);
+            }
+            throw ex;
+        }
     }
 
     /**
@@ -170,6 +196,8 @@ final class GameRecorder {
      */
     private JsonObject toJson() {
         JsonObject root = new JsonObject();
+        root.addProperty("formatVersion", FORMAT_VERSION);
+        root.addProperty("recordId", recordId);
         root.addProperty("roomId", roomId);
         root.addProperty("redPlayerId", redPlayerId);
         root.addProperty("blackPlayerId", blackPlayerId);
@@ -181,6 +209,21 @@ final class GameRecorder {
         // deepCopy 避免调用方拿到 root 后间接修改内部 moves，保持记录器封装边界。
         root.add("moves", moves.deepCopy());
         return root;
+    }
+
+    /**
+     * 在同一目录发布完整临时文件，文件系统不支持原子移动时安全回退。
+     *
+     * @param source 已完整写入的临时文件。
+     * @param target 最终棋谱路径。
+     * @throws IOException 移动失败时抛出，由终局入口记录日志但不影响 gameOver。
+     */
+    private static void moveAtomically(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException ex) {
+            Files.move(source, target);
+        }
     }
 
     /**

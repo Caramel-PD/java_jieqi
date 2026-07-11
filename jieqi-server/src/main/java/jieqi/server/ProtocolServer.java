@@ -62,6 +62,10 @@ final class ProtocolServer {
     static final int ERROR_ILLEGAL_MOVE = 2001;
     /** 非当前行棋方发起 move。 */
     static final int ERROR_WRONG_TURN = 2002;
+    /** 请求的已落盘棋谱不存在。 */
+    static final int ERROR_RECORD_NOT_FOUND = 3001;
+    private static final int DEFAULT_RECORD_LIMIT = 20;
+    private static final int MAX_RECORD_LIMIT = 100;
 
     /** 服务端配置集中保存端口、计时、棋谱目录和重复判定阈值，避免散落常量。 */
     private final Core.ServerConfig config;
@@ -79,6 +83,8 @@ final class ProtocolServer {
     private final AtomicInteger roomSequence = new AtomicInteger(1);
     /** 统一调度回合计时任务，房间内再用 synchronized 做状态保护。 */
     private final ScheduledExecutorService scheduler;
+    /** 棋谱查询只读磁盘，不持有或访问 GameRoom，保证查询与在线对局状态隔离。 */
+    private final GameRecordRepository gameRecords;
 
     /**
      * 使用配置中的账户文件创建协议服务器。
@@ -102,6 +108,7 @@ final class ProtocolServer {
     ProtocolServer(Core.ServerConfig config, Core.AccountStore accounts) {
         this.config = Objects.requireNonNull(config, "config");
         this.accounts = Objects.requireNonNull(accounts, "accounts");
+        this.gameRecords = new GameRecordRepository(config.recordsDir);
         // 单线程调度器让超时回调顺序可预测；真正修改房间状态仍由 GameRoom 锁保护。
         this.scheduler = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
     }
@@ -201,6 +208,8 @@ final class ProtocolServer {
                 case "requestdraw" -> handleRequestDraw(session);
                 case "drawresponse" -> handleDrawResponse(session, json);
                 case "serverstatus" -> handleServerStatus(session);
+                case "querygamerecords" -> handleQueryGameRecords(session, json);
+                case "querygamerecord" -> handleQueryGameRecord(session, json);
                 // 未知消息按设计文档静默忽略并打日志，避免影响跨组兼容。
                 default -> System.out.println("ignore unknown messageType: " + type);
             }
@@ -483,6 +492,54 @@ final class ProtocolServer {
     }
 
     /**
+     * 处理已登录客户端的棋谱列表查询。
+     *
+     * @param session 当前连接会话。
+     * @param json 请求 JSON，可选 offset 和 limit。
+     * @throws IllegalArgumentException 分页字段类型或范围非法时抛出，由分发层转为 error 4001。
+     * @apiNote 查询仅扫描落盘文件，不读取或修改在线房间。
+     */
+    private void handleQueryGameRecords(Core.Session session, JsonObject json) {
+        if (!requireLogin(session)) {
+            return;
+        }
+        int offset = optionalInt(json, "offset", 0);
+        int requestedLimit = optionalInt(json, "limit", DEFAULT_RECORD_LIMIT);
+        if (offset < 0 || requestedLimit <= 0) {
+            throw new IllegalArgumentException("invalid pagination");
+        }
+        int limit = Math.min(requestedLimit, MAX_RECORD_LIMIT);
+        GameRecordRepository.QueryResult result = gameRecords.query(offset, limit);
+        session.send(Messages.gameRecordList(result.total(), offset, limit, result.records()));
+    }
+
+    /**
+     * 处理已登录客户端的单局棋谱详情查询。
+     *
+     * @param session 当前连接会话。
+     * @param json 请求 JSON，必须包含非空 recordId。
+     * @throws IllegalArgumentException recordId 缺失或类型错误时抛出，由分发层转为 error 4001。
+     * @apiNote recordId 只参与已解析内容比较，绝不参与文件路径拼接。
+     */
+    private void handleQueryGameRecord(Core.Session session, JsonObject json) {
+        if (!requireLogin(session)) {
+            return;
+        }
+        JsonElement recordIdElement = Json.get(json, "recordId");
+        if (recordIdElement == null || !recordIdElement.isJsonPrimitive()
+                || !recordIdElement.getAsJsonPrimitive().isString()) {
+            throw new IllegalArgumentException("invalid recordId");
+        }
+        String recordId = recordIdElement.getAsString();
+        if (recordId.isBlank()) {
+            throw new IllegalArgumentException("empty recordId");
+        }
+        gameRecords.findByRecordId(recordId).ifPresentOrElse(
+                record -> session.send(Messages.gameRecord(record)),
+                () -> session.send(Messages.error(ERROR_RECORD_NOT_FOUND, "game record not found")));
+    }
+
+    /**
      * 校验会话是否已登录。
      *
      * @param session 当前连接会话。
@@ -563,6 +620,30 @@ final class ProtocolServer {
             throw new IllegalArgumentException("missing " + key);
         }
         return element.getAsInt();
+    }
+
+    /**
+     * 读取可选整数字段，缺失时使用默认值。
+     *
+     * @param json JSON 对象。
+     * @param key 字段名。
+     * @param defaultValue 字段缺失时的默认值。
+     * @return 字段整数值或默认值。
+     * @throws IllegalArgumentException 字段存在但不是整数数值时抛出。
+     */
+    private static int optionalInt(JsonObject json, String key, int defaultValue) {
+        JsonElement element = Json.get(json, key);
+        if (element == null) {
+            return defaultValue;
+        }
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException("invalid " + key);
+        }
+        try {
+            return element.getAsBigDecimal().intValueExact();
+        } catch (ArithmeticException | NumberFormatException ex) {
+            throw new IllegalArgumentException("invalid " + key, ex);
+        }
     }
 
     /**

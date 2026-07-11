@@ -179,6 +179,41 @@ final class Messages {
         return o.toString();
     }
 
+    /**
+     * 构造已落盘棋谱的分页列表响应。
+     *
+     * @param total 分页前有效棋谱总数。
+     * @param offset 本页起始偏移。
+     * @param limit 本次实际采用的页大小上限。
+     * @param records 当前页棋谱摘要。
+     * @return 可直接发送给客户端的 gameRecordList JSON。
+     */
+    static String gameRecordList(int total, int offset, int limit, Iterable<JsonObject> records) {
+        JsonObject o = base("gameRecordList");
+        o.addProperty("total", total);
+        o.addProperty("offset", offset);
+        o.addProperty("limit", limit);
+        JsonArray arr = new JsonArray();
+        for (JsonObject record : records) {
+            arr.add(record.deepCopy());
+        }
+        o.add("records", arr);
+        return o.toString();
+    }
+
+    /**
+     * 构造单局棋谱详情响应。
+     *
+     * @param record 已从落盘文件解析并校验的原始棋谱对象。
+     * @return 可直接发送给客户端的 gameRecord JSON。
+     */
+    static String gameRecord(JsonObject record) {
+        JsonObject o = base("gameRecord");
+        // 深拷贝避免消息构造过程意外修改仓库返回的原始棋谱结构。
+        o.add("record", record.deepCopy());
+        return o.toString();
+    }
+
     record RoomStatus(String roomId, String redPlayerId, String blackPlayerId,
                       boolean started, boolean finished, String currentTurn) {}
 
