@@ -72,6 +72,23 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void lastStatsRecordsTranspositionTableCounters() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/R3K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(2);
+
+        agent.selectMove(view, TimeBudget.unlimited());
+        SearchStats first = agent.lastStats();
+        agent.selectMove(view, TimeBudget.unlimited());
+        SearchStats second = agent.lastStats();
+
+        assertTrue(first.ttStores() > 0);
+        assertTrue(second.ttHits() > 0);
+        assertTrue(second.ttCutoffs() > 0);
+    }
+
+    @Test
     void expectiAgentPrefersImmediateKingCapture() {
         PlayerView view = viewOf("""
                 4k4/9/9/9/9/9/9/9/9/K3R4 r
@@ -131,6 +148,54 @@ class ExpectiAgentTest {
         agent.selectMove(view, TimeBudget.ofMillis(0));
 
         assertTrue(agent.lastStats().timedOut());
+    }
+
+    @Test
+    void timedOutSearchDoesNotStorePartialEntry() {
+        PlayerView view = viewOf(BoardText.INITIAL);
+        TranspositionTable table = new TranspositionTable(64);
+        ExpectiAgent agent = new ExpectiAgent(3, new PositionEvaluator(), new MoveOrderer(), table);
+
+        agent.selectMove(view, TimeBudget.ofMillis(0));
+
+        assertTrue(agent.lastStats().timedOut());
+        assertEquals(0, table.size());
+        assertEquals(0, agent.lastStats().ttStores());
+    }
+
+    @Test
+    void searchWithAndWithoutTtReturnsSameMove() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/R3K4 r
+                """);
+        ExpectiAgent withoutTt = new ExpectiAgent(
+                2,
+                new PositionEvaluator(),
+                new MoveOrderer(),
+                TranspositionTable.disabled());
+        ExpectiAgent withTt = new ExpectiAgent(
+                2,
+                new PositionEvaluator(),
+                new MoveOrderer(),
+                new TranspositionTable(256));
+
+        Optional<Move> without = withoutTt.selectMove(view, TimeBudget.unlimited());
+        Optional<Move> with = withTt.selectMove(view, TimeBudget.unlimited());
+
+        assertEquals(without, with);
+    }
+
+    @Test
+    void everyLegalMoveRemainsSearchable() {
+        PlayerView view = viewOf("""
+                4k4/9/9/9/9/9/9/9/4P4/R3K4 r
+                """);
+        ExpectiAgent agent = new ExpectiAgent(1);
+
+        agent.selectMove(view, TimeBudget.unlimited());
+
+        assertTrue(view.legalMoves().size() > 4);
+        assertTrue(agent.lastStats().searchedNodes() >= view.legalMoves().size());
     }
 
     @Test

@@ -5,13 +5,10 @@ import jieqi.common.Coord;
 import jieqi.common.Move;
 import jieqi.common.PieceType;
 import jieqi.rules.BoardSnapshot;
-import jieqi.rules.BoardText;
 import jieqi.rules.CellState;
 import jieqi.rules.RuleEngine;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -34,7 +31,8 @@ public final class ExpectiAgent implements Agent {
     private final int maxDepth;
     private final PositionEvaluator evaluator;
     private final MoveOrderer moveOrderer;
-    private volatile SearchStats lastStats = new SearchStats(0, 0, 0, 0, false);
+    private final TranspositionTable transpositionTable;
+    private volatile SearchStats lastStats = new SearchStats(0, 0, 0, 0, 0, 0, 0, false);
 
     public ExpectiAgent() {
         this(DEFAULT_MAX_DEPTH);
@@ -49,12 +47,21 @@ public final class ExpectiAgent implements Agent {
     }
 
     ExpectiAgent(int maxDepth, PositionEvaluator evaluator, MoveOrderer moveOrderer) {
+        this(maxDepth, evaluator, moveOrderer, new TranspositionTable());
+    }
+
+    ExpectiAgent(
+            int maxDepth,
+            PositionEvaluator evaluator,
+            MoveOrderer moveOrderer,
+            TranspositionTable transpositionTable) {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1");
         }
         this.maxDepth = maxDepth;
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
         this.moveOrderer = Objects.requireNonNull(moveOrderer, "moveOrderer");
+        this.transpositionTable = Objects.requireNonNull(transpositionTable, "transpositionTable");
     }
 
     @Override
@@ -64,7 +71,7 @@ public final class ExpectiAgent implements Agent {
 
         List<Move> legalMoves = view.legalMoves();
         if (legalMoves.isEmpty()) {
-            lastStats = new SearchStats(0, 0, 0, 0, false);
+            lastStats = new SearchStats(0, 0, 0, 0, 0, 0, 0, false);
             return Optional.empty();
         }
 
@@ -76,12 +83,12 @@ public final class ExpectiAgent implements Agent {
 
         for (Move move : orderedLegalMoves) {
             if (capturesKing(board, move)) {
-                lastStats = new SearchStats(0, 0, 0, 0, false);
+                lastStats = new SearchStats(0, 0, 0, 0, 0, 0, 0, false);
                 return Optional.of(move);
             }
         }
 
-        SearchContext context = new SearchContext(budget);
+        SearchContext context = new SearchContext(budget, transpositionTable);
         if (budget.expired()) {
             context.timedOut = true;
             lastStats = context.toStats(0);
@@ -107,7 +114,7 @@ public final class ExpectiAgent implements Agent {
     }
 
     int scoreMoveForTesting(PlayerView view, Move move, int depth, int alpha, int beta) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         return scoreMove(
                 view.informationBoard(),
                 view.sideToMove(),
@@ -120,7 +127,7 @@ public final class ExpectiAgent implements Agent {
     }
 
     int scoreMoveForTesting(PlayerView view, Move move, int depth, BeliefState belief, int alpha, int beta) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         return scoreMove(
                 view.informationBoard(),
                 view.sideToMove(),
@@ -133,7 +140,7 @@ public final class ExpectiAgent implements Agent {
     }
 
     int scoreMoveAsRevealForTesting(PlayerView view, Move move, int depth, BeliefState belief, PieceType flipAs) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         return scoreKnownMove(
                 view.informationBoard(),
                 view.sideToMove(),
@@ -151,14 +158,14 @@ public final class ExpectiAgent implements Agent {
     }
 
     int quiescenceScoreForTesting(PlayerView view) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         int score = quiescence(view.informationBoard(), view.sideToMove(), -INF, INF, view.beliefState(), context, 0);
         lastStats = context.toStats(0);
         return score;
     }
 
     int scoreQuiescenceMoveForTesting(PlayerView view, Move move, BeliefState belief) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         int score = scoreQuiescenceMove(
                 view.informationBoard(),
                 view.sideToMove(),
@@ -177,7 +184,7 @@ public final class ExpectiAgent implements Agent {
             Move move,
             BeliefState belief,
             PieceType flipAs) {
-        SearchContext context = new SearchContext(TimeBudget.unlimited());
+        SearchContext context = new SearchContext(TimeBudget.unlimited(), TranspositionTable.disabled());
         int score = scoreKnownQuiescenceMove(
                 view.informationBoard(),
                 view.sideToMove(),
@@ -199,20 +206,36 @@ public final class ExpectiAgent implements Agent {
             BeliefState belief,
             int depth,
             SearchContext context) {
-        List<Move> orderedMoves = moveOrderer.order(board, side, legalMoves, belief);
-        Move bestMove = orderedMoves.get(0);
-        int bestScore = Integer.MIN_VALUE;
+        String positionKey = TranspositionTable.positionKey(board, side, belief);
         int alpha = -INF;
+        int beta = INF;
+        int originalAlpha = alpha;
+        int originalBeta = beta;
+        TranspositionTable.ProbeResult probe = context.probe(positionKey, depth, alpha, beta);
+        alpha = probe.alpha();
+        beta = probe.beta();
+        List<Move> orderedMoves = moveOrderer.order(
+                board,
+                side,
+                legalMoves,
+                belief,
+                probe.bestMove().orElse(context.bestMove(positionKey).orElse(null)));
+        Move bestMove = orderedMoves.get(0);
+        if (probe.cutoff()) {
+            return new RootResult(probe.bestMove().orElse(bestMove), probe.score());
+        }
+        int bestScore = Integer.MIN_VALUE;
         BeliefState rootBelief = belief.copy();
         for (Move move : orderedMoves) {
             context.checkTime();
-            int score = scoreMove(board, side, move, depth, alpha, INF, rootBelief, context);
+            int score = scoreMove(board, side, move, depth, alpha, beta, rootBelief, context);
             if (score > bestScore) {
                 bestMove = move;
                 bestScore = score;
             }
             alpha = Math.max(alpha, bestScore);
         }
+        storeBound(context, positionKey, depth, bestScore, originalAlpha, originalBeta, bestMove);
         return new RootResult(bestMove, bestScore);
     }
 
@@ -224,35 +247,30 @@ public final class ExpectiAgent implements Agent {
             int beta,
             BeliefState belief,
             SearchContext context) {
-        CacheKey cacheKey = null;
-        if (alpha == -INF && beta == INF) {
-            cacheKey = CacheKey.negamax(board, side, depth, belief);
-            Integer cached = context.exactScores.get(cacheKey);
-            if (cached != null) {
-                return cached;
-            }
+        String positionKey = TranspositionTable.positionKey(board, side, belief);
+        int originalAlpha = alpha;
+        int originalBeta = beta;
+        TranspositionTable.ProbeResult probe = context.probe(positionKey, depth, alpha, beta);
+        alpha = probe.alpha();
+        beta = probe.beta();
+        if (probe.cutoff()) {
+            return probe.score();
         }
         context.enterNode();
         int result;
         if (RuleEngine.isKingCaptured(board, side)) {
             result = -WIN_SCORE - depth;
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, result);
-            }
+            context.store(new TranspositionEntry(positionKey, depth, result, BoundType.EXACT, null));
             return result;
         }
         if (RuleEngine.isKingCaptured(board, side.opposite())) {
             result = WIN_SCORE + depth;
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, result);
-            }
+            context.store(new TranspositionEntry(positionKey, depth, result, BoundType.EXACT, null));
             return result;
         }
         if (depth <= 0) {
             result = quiescence(board, side, alpha, beta, belief, context, 0);
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, result);
-            }
+            storeBound(context, positionKey, depth, result, originalAlpha, originalBeta, null);
             return result;
         }
 
@@ -260,23 +278,26 @@ public final class ExpectiAgent implements Agent {
                 board,
                 side,
                 RuleEngine.generateLegalMoves(board, side),
-                belief);
+                belief,
+                context.bestMove(positionKey).orElse(null));
         if (legalMoves.isEmpty()) {
             result = evaluate(board, side, belief);
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, result);
-            }
+            context.store(new TranspositionEntry(positionKey, depth, result, BoundType.EXACT, null));
             return result;
         }
 
         int best = -INF;
+        Move bestMove = legalMoves.get(0);
         for (Move move : legalMoves) {
             if (capturesKing(board, move)) {
-                return WIN_SCORE + depth;
+                result = WIN_SCORE + depth;
+                context.store(new TranspositionEntry(positionKey, depth, result, BoundType.EXACT, move));
+                return result;
             }
             int score = scoreMove(board, side, move, depth, alpha, beta, belief, context);
             if (score > best) {
                 best = score;
+                bestMove = move;
             }
             alpha = Math.max(alpha, score);
             if (alpha >= beta) {
@@ -284,9 +305,7 @@ public final class ExpectiAgent implements Agent {
                 break;
             }
         }
-        if (cacheKey != null) {
-            context.exactScores.put(cacheKey, best);
-        }
+        storeBound(context, positionKey, depth, best, originalAlpha, originalBeta, bestMove);
         return best;
     }
 
@@ -298,43 +317,21 @@ public final class ExpectiAgent implements Agent {
             BeliefState belief,
             SearchContext context,
             int quiescenceDepth) {
-        CacheKey cacheKey = null;
-        if (alpha == -INF && beta == INF) {
-            cacheKey = CacheKey.quiescence(board, side, quiescenceDepth, belief);
-            Integer cached = context.exactScores.get(cacheKey);
-            if (cached != null) {
-                return cached;
-            }
-        }
         context.enterQuiescenceNode();
         if (RuleEngine.isKingCaptured(board, side)) {
-            int score = -WIN_SCORE - quiescenceDepth;
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, score);
-            }
-            return score;
+            return -WIN_SCORE - quiescenceDepth;
         }
         if (RuleEngine.isKingCaptured(board, side.opposite())) {
-            int score = WIN_SCORE + quiescenceDepth;
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, score);
-            }
-            return score;
+            return WIN_SCORE + quiescenceDepth;
         }
 
         boolean inImmediateKingThreat = hasImmediateKingThreat(board, side);
         int standPat = evaluate(board, side, belief);
         if (quiescenceDepth >= MAX_QUIESCENCE_DEPTH) {
-            if (cacheKey != null) {
-                context.exactScores.put(cacheKey, standPat);
-            }
             return standPat;
         }
         if (!inImmediateKingThreat) {
             if (standPat >= beta) {
-                if (cacheKey != null) {
-                    context.exactScores.put(cacheKey, standPat);
-                }
                 return standPat;
             }
             alpha = Math.max(alpha, standPat);
@@ -365,9 +362,6 @@ public final class ExpectiAgent implements Agent {
         }
         if (inImmediateKingThreat && !searched) {
             best = -WIN_SCORE + quiescenceDepth;
-        }
-        if (cacheKey != null) {
-            context.exactScores.put(cacheKey, best);
         }
         return best;
     }
@@ -592,48 +586,46 @@ public final class ExpectiAgent implements Agent {
                 && revealed.type() == PieceType.KING;
     }
 
+    private void storeBound(
+            SearchContext context,
+            String positionKey,
+            int depth,
+            int score,
+            int originalAlpha,
+            int originalBeta,
+            Move bestMove) {
+        BoundType boundType;
+        if (score <= originalAlpha) {
+            boundType = BoundType.UPPER;
+        } else if (score >= originalBeta) {
+            boundType = BoundType.LOWER;
+        } else {
+            boundType = BoundType.EXACT;
+        }
+        context.store(new TranspositionEntry(positionKey, depth, score, boundType, bestMove));
+    }
+
     private record SearchState(BoardSnapshot board, BeliefState belief) {
     }
 
     private record RootResult(Move move, int score) {
     }
 
-    private record CacheKey(String board, Color side, int depth, String belief) {
-
-        private static CacheKey negamax(BoardSnapshot board, Color side, int depth, BeliefState belief) {
-            return new CacheKey(BoardText.format(board, side), side, depth, beliefKey(belief));
-        }
-
-        private static CacheKey quiescence(BoardSnapshot board, Color side, int quiescenceDepth, BeliefState belief) {
-            return new CacheKey(BoardText.format(board, side), side, -100 - quiescenceDepth, beliefKey(belief));
-        }
-
-        private static String beliefKey(BeliefState belief) {
-            StringBuilder key = new StringBuilder();
-            for (Color color : Color.values()) {
-                key.append(color).append(':');
-                for (PieceType type : PieceType.values()) {
-                    if (type != PieceType.KING) {
-                        key.append(type).append('=').append(belief.count(color, type)).append(';');
-                    }
-                }
-                key.append("u=").append(belief.unknownRemovals(color)).append('|');
-            }
-            return key.toString();
-        }
-    }
-
     private static final class SearchContext {
         private final TimeBudget budget;
-        private final Map<CacheKey, Integer> exactScores = new HashMap<>();
+        private final TranspositionTable transpositionTable;
         private int completedDepth;
         private long searchedNodes;
         private long betaCutoffs;
         private long quiescenceNodes;
+        private long ttHits;
+        private long ttStores;
+        private long ttCutoffs;
         private boolean timedOut;
 
-        private SearchContext(TimeBudget budget) {
+        private SearchContext(TimeBudget budget, TranspositionTable transpositionTable) {
             this.budget = budget;
+            this.transpositionTable = transpositionTable;
         }
 
         private void enterNode() {
@@ -655,8 +647,37 @@ public final class ExpectiAgent implements Agent {
             }
         }
 
+        private TranspositionTable.ProbeResult probe(String positionKey, int depth, int alpha, int beta) {
+            TranspositionTable.ProbeResult result = transpositionTable.probe(positionKey, depth, alpha, beta);
+            if (result.hit()) {
+                ttHits++;
+                if (result.cutoff()) {
+                    ttCutoffs++;
+                }
+            }
+            return result;
+        }
+
+        private Optional<Move> bestMove(String positionKey) {
+            return transpositionTable.bestMove(positionKey);
+        }
+
+        private void store(TranspositionEntry entry) {
+            if (!timedOut && transpositionTable.store(entry)) {
+                ttStores++;
+            }
+        }
+
         private SearchStats toStats(int completedDepth) {
-            return new SearchStats(completedDepth, searchedNodes, betaCutoffs, quiescenceNodes, timedOut);
+            return new SearchStats(
+                    completedDepth,
+                    searchedNodes,
+                    betaCutoffs,
+                    quiescenceNodes,
+                    ttHits,
+                    ttStores,
+                    ttCutoffs,
+                    timedOut);
         }
     }
 
