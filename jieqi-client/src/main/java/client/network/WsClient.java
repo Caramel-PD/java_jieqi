@@ -1,4 +1,4 @@
-package client;
+package client.network;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -67,7 +67,7 @@ public class WsClient {
                     stopPing();
                     if (!opened && onConnectErrorCallback != null) {
                         String msg = reason == null || reason.isBlank()
-                                ? "无法连接服务器 (code " + code + ")"
+                                ? "无法连接服务�?(code " + code + ")"
                                 : reason;
                         Platform.runLater(() -> onConnectErrorCallback.accept(msg));
                     }
@@ -98,7 +98,7 @@ public class WsClient {
                 if (client != null && client.isOpen()) {
                     send(MessageBuilder.buildPing());
                 }
-            }, 5, 10, TimeUnit.SECONDS); // 每10秒发送一次ping
+            }, 5, 10, TimeUnit.SECONDS); // �?0秒发送一�?ing
         }
     }
 
@@ -112,9 +112,9 @@ public class WsClient {
     public void send(String json) {
         if (client != null && client.isOpen()) {
             client.send(json);
-            LOG.debug("发送: {}", json);
+            LOG.debug("发�?? {}", json);
         } else {
-            LOG.warn("连接未打开，无法发送");
+            LOG.warn("连接尚未打开，无法发送");
         }
     }
 
