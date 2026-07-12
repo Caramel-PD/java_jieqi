@@ -81,7 +81,11 @@ public final class ExpectiAgent implements Agent {
         BoardSnapshot board = view.informationBoard();
         Color side = view.sideToMove();
         BeliefState rootBelief = view.beliefState();
-        List<Move> orderedLegalMoves = moveOrderer.order(board, side, legalMoves, rootBelief);
+        List<Move> safeMoves = legalMoves.stream()
+                .filter(move -> !leavesKingImmediatelyCapturable(board, side, move, rootBelief))
+                .toList();
+        List<Move> rootMoves = safeMoves.isEmpty() ? legalMoves : safeMoves;
+        List<Move> orderedLegalMoves = moveOrderer.order(board, side, rootMoves, rootBelief);
         Move bestMove = orderedLegalMoves.get(0);
 
         for (Move move : orderedLegalMoves) {
@@ -598,6 +602,20 @@ public final class ExpectiAgent implements Agent {
             }
         }
         return false;
+    }
+
+    private boolean leavesKingImmediatelyCapturable(
+            BoardSnapshot board,
+            Color side,
+            Move move,
+            BeliefState belief) {
+        CellState source = board.cellAt(move.from());
+        PieceType flipAs = source instanceof CellState.Hidden ? firstAvailableType(belief, side) : null;
+        try {
+            return hasImmediateKingThreat(board.apply(move.from(), move.to(), flipAs), side);
+        } catch (IllegalArgumentException ignored) {
+            return true;
+        }
     }
 
     private boolean isCapture(BoardSnapshot board, Move move) {

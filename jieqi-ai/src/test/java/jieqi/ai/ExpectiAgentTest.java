@@ -42,6 +42,22 @@ class ExpectiAgentTest {
     }
 
     @Test
+    void zeroBudgetFallbackDoesNotIgnoreImmediateKingThreat() {
+        PlayerView view = viewOf("""
+                4k4/9/4R4/9/9/9/x8/9/9/4K4 b
+                """);
+        ExpectiAgent agent = new ExpectiAgent();
+
+        Move selected = agent.selectMove(view, TimeBudget.ofMillis(0)).orElseThrow();
+        var after = view.informationBoard().apply(selected.from(), selected.to(),
+                view.isHidden(selected.from()) ? PieceType.PAWN : null);
+
+        assertFalse(jieqi.rules.RuleEngine.generateLegalMoves(after, Color.RED).stream()
+                .anyMatch(move -> after.cellAt(move.to()) instanceof jieqi.rules.CellState.Revealed revealed
+                        && revealed.type() == PieceType.KING));
+    }
+
+    @Test
     void unlimitedBudgetCompletesAtLeastDepthThree() {
         PlayerView view = viewOf("""
                 4k4/9/9/9/9/9/9/9/4P4/4K4 r
